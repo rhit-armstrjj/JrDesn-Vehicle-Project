@@ -14,7 +14,6 @@
 
 #include <Adafruit_INA219.h>
 #include "BluetoothSerial.h"
-#include <string.h>
 
 #define STEERING_MAX 170
 #define STEERING_MIN 10
@@ -74,11 +73,16 @@ void setup()
   startup_motor();
   startup_steering();
 
+  SerialBT.printf("Startup Complete");
+  
 }
 
+/**
+ * TODO: Handle Input from the HUSKYLens
+ * TODO: Drive the car
+*/
 void loop()
 {
-
   steering.write(STEERING_MIN);
   delay(5000);
   steering.write(STEERING_MAX);
