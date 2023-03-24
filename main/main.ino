@@ -65,6 +65,12 @@ void init_bluetooth() {
 
 }
 
+void setSpeed(int speed) {
+    if(speed < 0 || speed > 100) return;
+    int val = map(speed, 0, 100, SPEED_MIN, SPEED_MAX);
+    motor.write(val);
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -75,11 +81,14 @@ void setup()
 
   SerialBT.printf("Startup Complete");
   
+  setSpeed(30);
+  
 }
 
 /**
  * TODO: Handle Input from the HUSKYLens
  * TODO: Drive the car
+ * TODO: Setup power recording
 */
 void loop()
 {
