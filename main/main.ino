@@ -63,7 +63,8 @@ void startup_steering() {
 
 void init_bluetooth() {
   SerialBT.begin(*device_name);
-  Serial.printf("##########\nDevice Name: %s\n########", device_name->c_str());
+  SerialBT.printf("##########\nDevice Name: %s\n########", device_name->c_str());
+  delay(100);
   
   #ifdef USE_PIN // Optional 
     SerialBT.setPin(pin);
@@ -76,6 +77,53 @@ void setSpeed(int speed) {
     if(speed < 0 || speed > 100) return;
     int val = map(speed, 0, 100, SPEED_MIN, SPEED_MAX);
     motor.write(val);
+}
+
+/**
+ * Power Info
+ * Shunt Voltage: mV
+ * busVoltage: V
+ * current: mA
+ * loadVoltage: V
+ * power: mW
+*/
+struct PowerInfo {
+  float shuntVoltage;
+  float busVoltage;
+  float current;
+  float loadVoltage;
+  float power;
+};
+
+
+/**
+ * Handles getting power info.
+*/
+void getPowerInfo(struct PowerInfo *data) { 
+
+  float shuntvoltage = ina219.getShuntVoltage_mV();
+  float busvoltage = ina219.getBusVoltage_V();
+  *data = {
+    shuntvoltage,
+    busvoltage,
+    ina219.getCurrent_mA(), 
+    busvoltage + (shuntvoltage / 1000),
+    ina219.getPower_mW()
+  };
+}
+
+
+int transmitPowerInfo() {
+  struct PowerInfo info;
+  getPowerInfo(&info);
+
+  size_t length = SerialBT.printf(
+    "##################\nTime: %d ms\r\nBus Voltage:   %f V\r\nShunt Voltage: %f mV\r\nLoad Voltage:  %f V\r\nCurrent:       %f mA\r\nPower: %f mW\r\n",
+    millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
+  );
+
+  delay(200);
+  return length;
 }
 
 /********* END HELPER FUNCTIONS *********/
@@ -94,44 +142,34 @@ void setup()
   Serial.begin(115200);
 
   if (! ina219.begin()) {
-    SerialBT.printf("Failed to find INA219 chip\n");
+    SerialBT.printf("Failed to find INA219 chip\r\n");
   }
 
-  
-  SerialBT.printf("Startup Complete\n");
+  SerialBT.println("################");
+  SerialBT.println("Startup Complete");
+  SerialBT.println("################");
 }
 
 /**
  * TODO: Handle Input from the HUSKYLens
- * TODO: Drive the car
- * TODO: Setup power recording
 */
 
+int loops = 0;
 /******** ARDUINO LOOP FUNCTION **********/
 void loop()
 {
-  float shuntvoltage = 0;
-  float busvoltage = 0;
-  float current_mA = 0;
-  float loadvoltage = 0;
-  float power_mW = 0;
 
-  shuntvoltage = ina219.getShuntVoltage_mV();
-  busvoltage = ina219.getBusVoltage_V();
-  current_mA = ina219.getCurrent_mA();
-  power_mW = ina219.getPower_mW();
-  loadvoltage = busvoltage + (shuntvoltage / 1000);
+  
+  int powerSize = transmitPowerInfo();
 
-  Serial.print("Bus Voltage:   "); Serial.print(busvoltage); Serial.println(" V");
-  Serial.print("Shunt Voltage: "); Serial.print(shuntvoltage); Serial.println(" mV");
-  Serial.print("Load Voltage:  "); Serial.print(loadvoltage); Serial.println(" V");
-  Serial.print("Current:       "); Serial.print(current_mA); Serial.println(" mA");
-  Serial.print("Power:         "); Serial.print(power_mW); Serial.println(" mW");
-  Serial.println("");
-
-  // steering.write(STEERING_MIN);
-  // delay(2000);
-  // steering.write(STEERING_MAX);
-  delay(200);
-	
+  steering.write(STEERING_MIN);
+  delay(5000);
+  steering.write(STEERING_MAX);
+  delay(5000);
+  
+  for(int i = 0; i < powerSize; i++) {
+    SerialBT.write('\b');
+  }
+  delay(10);
+	loops++;
 }
