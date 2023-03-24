@@ -47,8 +47,18 @@ const char *pin = "5188";
 /******** CURRENT SENSOR **********/
 Adafruit_INA219 ina219;
 
+/******** Huskylens **************/
+HUSKYLENS camera;
+Wire camI2C;
+
+
+//TODO: Setup FRAM for logging power.
+/*******/
 
 /********* BEGIN HELPER FUNCTIONS **********/
+/**
+ * Sets up motor contorl.
+*/
 void startup_motor() {
   motor.attach(SPEED_PIN, 800, 2000);
   delay(1000);
@@ -56,11 +66,28 @@ void startup_motor() {
   delay(4000);
 }
 
+/**
+ * Sets up Steering servo.
+*/
 void startup_steering() {
   steering.attach(STEERING_PIN);
   steering.write(90);
 }
 
+/**
+ * Starts up Huskylens
+*/
+void startup_huskylens() {
+  camI2C.begin();
+  while(!camera.begin(camI2C)) {
+    SerialBT.println("Warning: Huskylens not connected. Retrying.");
+    delay(400);
+  }
+}
+
+/**
+ * Initializes bluetooth
+*/
 void init_bluetooth() {
   SerialBT.begin(*device_name);
   SerialBT.printf("##########\nDevice Name: %s\n########", device_name->c_str());
@@ -73,6 +100,9 @@ void init_bluetooth() {
 
 }
 
+/**
+ * Set speed by percentage.
+*/
 void setSpeed(int speed) {
     if(speed < 0 || speed > 100) return;
     int val = map(speed, 0, 100, SPEED_MIN, SPEED_MAX);
@@ -137,7 +167,8 @@ void setup()
   
   init_bluetooth();
   startup_motor();
-  startup_steering();  
+  startup_steering(); 
+  startup_huskylens(); 
 
   Serial.begin(115200);
 
