@@ -13,6 +13,7 @@
 #include <Adafruit_INA219.h>
 #include "BluetoothSerial.h"
 #include "HUSKYLENS.h"
+#include <vector>
 
 /**
  * Control Loop
@@ -55,6 +56,7 @@ FastPID speedPID(Kvp, Kvi, Kvd, Hzv, speedOutputBits, speedOutputSigned);
 String* device_name = new String("ECE362CarTeam07");
 BluetoothSerial SerialBT;
 const char *pin = "5188";
+std::vector<String> errorLog;
 
 
 /******** CURRENT SENSOR **********/
@@ -155,15 +157,20 @@ void getPowerInfo(struct PowerInfo *data) {
   };
 }
 
-
+/**
+ * Writes telemetry to screen. Needs to write status messages
+*/
 int transmitStatusInfo() {
   struct PowerInfo info;
   getPowerInfo(&info);
 
   size_t length = SerialBT.printf(
-    "##################\nTime: %d ms\r\nBus Voltage:   %f V\r\nShunt Voltage: %f mV\r\nLoad Voltage:  %f V\r\nCurrent:       %f mA\r\nPower: %f mW\r\n",
+    "##################\nTime: %d ms\r\nBus Voltage:   %f V\r\nShunt Voltage: %f mV\r\nLoad Voltage:  %f V\r\nCurrent:       %f mA\r\nPower: %f mW\r\n##########\r\n",
     millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
   );
+  for(int i = 0; i < errorLog; i++) {
+    SerialBT.println(errorLog.at(i));
+  }
   return length;
 }
 
@@ -179,7 +186,7 @@ bool getHuskyArrowX(int* x) {
  * For mapping arrow target to steering.
  * Output should be between STEERING_MIN & STEERING_MAX
 */
-int getSteeringSetpoint(int arrowX) {
+int getSteeringSetpoint(int steeringMapped) {
   // TODO Determine how steering should be given a setpoint.
   return -1;
 } 
@@ -240,15 +247,19 @@ void loop()
   }
   
   // TODO Need help with control theory.
-  uint8_t steeringAngle = steeringPID.step(getSteeringSetpoint(arrowX), arrowX-160);
+
+  // Map steering to center the arrow to the top of the screen
+  int steeringMapped = map(arrowX-160, -160, 160, STEERING_MIN, STEERING_MAX);
+  uint8_t steeringAngle = steeringPID.step(getSteeringSetpoint(steeringMapped), steeringMapped);
   steering.write(steeringAngle);
 
-  int speedTarget = getSpeedSetpoint(arrowX);
-  uint8_t targetSpeed = speedPID.step(speedTarget, prevTarget);
+  // feedback is mapped to arrow bc speed should determined by angle of steering column
+  int speedMapped = map(arrowX-160, -160, 160, SPEED_MIN, SPEED_MAX);
+  int targetSpeed = speedPID.step(getSpeedSetpoint(speedMapped), speedMapped);
   motor.write(targetSpeed);
 
 
-  // Reset Terminal
+  // Clear Terminal
   delay(loopDelay);
   SerialBT.write('\033[2J');
   SerialBT.write('\033[1;1H');
