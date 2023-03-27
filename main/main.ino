@@ -14,16 +14,29 @@
 #include "BluetoothSerial.h"
 #include "HUSKYLENS.h"
 
+/**
+ * Control Loop
+*/
+uint32_t loopDelay = 20;
+
 /******** MOTORS **********/
 #define STEERING_MAX 170
 #define STEERING_MIN 10
 #define STEERING_PIN 32
 Servo steering;
+float Ksp = 0.1, Ksi = 0.5, Ksd = 0, Hz = 1000/loopDelay;
+int steeringOutputBits = 8;
+bool steeringOutputSigned = true;
+FastPID steeringPID(Ksp, Ksi, Ksd, Hzs, steeringOutputBits, steeringOutputSigned);
 
 #define SPEED_MIN 50
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
+float Kvp = 0.1, Kvi = 0.5, Kvd = 0;
+int speedOutputBits = 7;
+bool speedOutputSigned = false;
+FastPID speedPID(Kvp, Kvi, Kvd, Hzv, speedOutputBits, speedOutputSigned);
 
 /******** CAMERA **********/
 #define HUSKY_SDA 21
@@ -49,7 +62,6 @@ Adafruit_INA219 ina219;
 
 /******** Huskylens **************/
 HUSKYLENS camera;
-Wire camI2C;
 
 
 //TODO: Setup FRAM for logging power.
@@ -72,14 +84,15 @@ void startup_motor() {
 void startup_steering() {
   steering.attach(STEERING_PIN);
   steering.write(90);
+
 }
 
 /**
  * Starts up Huskylens
 */
 void startup_huskylens() {
-  camI2C.begin();
-  while(!camera.begin(camI2C)) {
+  Wire.begin(HUSKY_ADR);
+  while(!camera.begin(Wire)) {
     SerialBT.println("Warning: Huskylens not connected. Retrying.");
     delay(400);
   }
@@ -143,7 +156,7 @@ void getPowerInfo(struct PowerInfo *data) {
 }
 
 
-int transmitPowerInfo() {
+int transmitStatusInfo() {
   struct PowerInfo info;
   getPowerInfo(&info);
 
@@ -151,10 +164,35 @@ int transmitPowerInfo() {
     "##################\nTime: %d ms\r\nBus Voltage:   %f V\r\nShunt Voltage: %f mV\r\nLoad Voltage:  %f V\r\nCurrent:       %f mA\r\nPower: %f mW\r\n",
     millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
   );
-
-  delay(200);
   return length;
 }
+
+/**
+ * For handling Huskylens issues.
+*/
+bool getHuskyArrowX(int* x) {
+  HUSKYLENSResult arrow = camera.read();
+  if(arrow.command != COMMAND_RETURN_ARROW) return false;
+}
+
+/**
+ * For mapping arrow target to steering.
+ * Output should be between STEERING_MIN & STEERING_MAX
+*/
+int getSteeringSetpoint(int arrowX) {
+  // TODO Determine how steering should be given a setpoint.
+  return -1;
+} 
+
+/**
+ * For mapping the speed based on the arrowX
+ * Output should be between SPEED_MIN & SPEED_MAX
+*/
+int getSpeedSetpoint(int arrowX) {
+  // TODO Determine how steering should be given a setpoint.
+  
+  return -1;
+} 
 
 /********* END HELPER FUNCTIONS *********/
 
@@ -179,28 +217,40 @@ void setup()
   SerialBT.println("################");
   SerialBT.println("Startup Complete");
   SerialBT.println("################");
+  delay(900);
+  SerialBT.write('\033[2J');
+  SerialBT.write('\033[1;1H');
+  delay(100);
 }
-
-/**
- * TODO: Handle Input from the HUSKYLens
-*/
 
 int loops = 0;
 /******** ARDUINO LOOP FUNCTION **********/
 void loop()
 {
+  // Telemetry Transmission
+  int powerSize = transmitStatusInfo();
 
-  
-  int powerSize = transmitPowerInfo();
-
-  steering.write(STEERING_MIN);
-  delay(5000);
-  steering.write(STEERING_MAX);
-  delay(5000);
-  
-  for(int i = 0; i < powerSize; i++) {
-    SerialBT.write('\b');
+  int arrowX;
+  // End loop if camera doesn't have a result ready.
+  if(!camera.available() && !getHuskyArrowX(&arrowX)) {
+    delay(loopDelay);
+    SerialBT.write('\033[2J');
+    SerialBT.write('\033[1;1H');
+    return;
   }
-  delay(10);
+  
+  // TODO Need help with control theory.
+  uint8_t steeringAngle = steeringPID.step(getSteeringSetpoint(arrowX), arrowX-160);
+  steering.write(steeringAngle);
+
+  int speedTarget = getSpeedSetpoint(arrowX);
+  uint8_t targetSpeed = speedPID.step(speedTarget, prevTarget);
+  motor.write(targetSpeed);
+
+
+  // Reset Terminal
+  delay(loopDelay);
+  SerialBT.write('\033[2J');
+  SerialBT.write('\033[1;1H');
 	loops++;
 }
