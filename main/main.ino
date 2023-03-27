@@ -18,31 +18,27 @@
 /**
  * Control Loop
 */
-uint32_t loopDelay = 20;
+uint32_t loopDelay = 70;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
 #define STEERING_MIN 10
 #define STEERING_PIN 32
 Servo steering;
-float Ksp = 0.1, Ksi = 0.5, Ksd = 0, Hz = 1000/loopDelay;
+float Ksp = 1, Ksi = 0.0, Ksd = 0, Hz = 1000/loopDelay;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
-FastPID steeringPID(Ksp, Ksi, Ksd, Hzs, steeringOutputBits, steeringOutputSigned);
+FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
 
-#define SPEED_MIN 50
+#define SPEED_MIN 49
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
-float Kvp = 0.1, Kvi = 0.5, Kvd = 0;
+float Kvp = 0.5, Kvi = 0.0, Kvd = 0;
 int speedOutputBits = 7;
 bool speedOutputSigned = false;
-FastPID speedPID(Kvp, Kvi, Kvd, Hzv, speedOutputBits, speedOutputSigned);
+FastPID speedPID(Kvp, Kvi, Kvd, Hz, speedOutputBits, speedOutputSigned);
 
-/******** CAMERA **********/
-#define HUSKY_SDA 21
-#define HUSKY_SCL 22
-#define HUSKY_ADR 0x32
 
 /******** BLEUTOOTH **********/
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
@@ -64,6 +60,9 @@ Adafruit_INA219 ina219;
 
 /******** Huskylens **************/
 HUSKYLENS camera;
+#define HUSKY_SDA 21
+#define HUSKY_SCL 22
+#define HUSKY_ADR 0x32
 
 
 //TODO: Setup FRAM for logging power.
@@ -89,15 +88,24 @@ void startup_steering() {
 
 }
 
+
+/**
+ * Sets the steering angle from -100 to 100
+*/
+void setSteering(int angle) {
+  steering.write(map(angle, -100, 100, STEERING_MIN, STEERING_MAX ));
+}
+
 /**
  * Starts up Huskylens
 */
 void startup_huskylens() {
-  Wire.begin(HUSKY_ADR);
   while(!camera.begin(Wire)) {
     SerialBT.println("Warning: Huskylens not connected. Retrying.");
     delay(400);
   }
+
+  camera.requestArrowsLearned();
 }
 
 /**
@@ -120,7 +128,11 @@ void init_bluetooth() {
 */
 void setSpeed(int speed) {
     if(speed < 0 || speed > 100) return;
-    int val = map(speed, 0, 100, SPEED_MIN, SPEED_MAX);
+    if(speed == 0) {
+      motor.write(0);
+      return;
+    }
+    int val = map(speed, 1, 100, SPEED_MIN, SPEED_MAX);
     motor.write(val);
 }
 
@@ -168,8 +180,8 @@ int transmitStatusInfo() {
     "##################\nTime: %d ms\r\nBus Voltage:   %f V\r\nShunt Voltage: %f mV\r\nLoad Voltage:  %f V\r\nCurrent:       %f mA\r\nPower: %f mW\r\n##########\r\n",
     millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
   );
-  for(int i = 0; i < errorLog; i++) {
-    SerialBT.println(errorLog.at(i));
+  for(int i = 0; i < errorLog.size(); i++) {
+    length += SerialBT.println(errorLog.at(i));
   }
   return length;
 }
@@ -177,9 +189,15 @@ int transmitStatusInfo() {
 /**
  * For handling Huskylens issues.
 */
-bool getHuskyArrowX(int* x) {
+int getHuskyArrowX() {
+  SerialBT.print("Request: ");
+  SerialBT.println(camera.request(1));
+  SerialBT.print("Available: ");
+  SerialBT.println(camera.available());
+  
   HUSKYLENSResult arrow = camera.read();
-  if(arrow.command != COMMAND_RETURN_ARROW) return false;
+  printResult(arrow);
+  return arrow.xTarget;
 }
 
 /**
@@ -198,9 +216,20 @@ int getSteeringSetpoint(int steeringMapped) {
 int getSpeedSetpoint(int arrowX) {
   // TODO Determine how steering should be given a setpoint.
   
-  return -1;
+  return abs(arrowX);
 } 
 
+void printResult(HUSKYLENSResult result){
+    if (result.command == COMMAND_RETURN_BLOCK){
+        SerialBT.println(String()+F("Block:xCenter=")+result.xCenter+F(",yCenter=")+result.yCenter+F(",width=")+result.width+F(",height=")+result.height+F(",ID=")+result.ID);
+    }
+    else if (result.command == COMMAND_RETURN_ARROW){
+        SerialBT.println(String()+F("Arrow:xOrigin=")+result.xOrigin+F(",yOrigin=")+result.yOrigin+F(",xTarget=")+result.xTarget+F(",yTarget=")+result.yTarget+F(",ID=")+result.ID);
+    }
+    else{
+        SerialBT.println("Object unknown!");
+    }
+}
 /********* END HELPER FUNCTIONS *********/
 
 
@@ -209,25 +238,21 @@ int getSpeedSetpoint(int arrowX) {
 void setup()
 {
   Serial.begin(115200);
+  Wire.begin();
   
   init_bluetooth();
   startup_motor();
   startup_steering(); 
   startup_huskylens(); 
 
-  Serial.begin(115200);
-
-  if (! ina219.begin()) {
-    SerialBT.printf("Failed to find INA219 chip\r\n");
-  }
+  //if (!ina219.begin(&Wire)) {
+    //SerialBT.printf("Failed to find INA219 chip\r\n");
+  //}
 
   SerialBT.println("################");
   SerialBT.println("Startup Complete");
   SerialBT.println("################");
   delay(900);
-  SerialBT.write('\033[2J');
-  SerialBT.write('\033[1;1H');
-  delay(100);
 }
 
 int loops = 0;
@@ -235,33 +260,24 @@ int loops = 0;
 void loop()
 {
   // Telemetry Transmission
-  int powerSize = transmitStatusInfo();
+  //int powerSize = transmitStatusInfo();
 
-  int arrowX;
-  // End loop if camera doesn't have a result ready.
-  if(!camera.available() && !getHuskyArrowX(&arrowX)) {
-    delay(loopDelay);
-    SerialBT.write('\033[2J');
-    SerialBT.write('\033[1;1H');
-    return;
-  }
-  
-  // TODO Need help with control theory.
+  //Arrow x is between 0 320
+  int arrowX = getHuskyArrowX();
 
   // Map steering to center the arrow to the top of the screen
-  int steeringMapped = map(arrowX-160, -160, 160, STEERING_MIN, STEERING_MAX);
-  uint8_t steeringAngle = steeringPID.step(getSteeringSetpoint(steeringMapped), steeringMapped);
-  steering.write(steeringAngle);
+  int steeringMapped = map(160-arrowX, -160, 160, -100, 100);
+  SerialBT.print("Arrow X: ");
+  SerialBT.println(steeringMapped);
+  setSteering(steeringMapped);
 
   // feedback is mapped to arrow bc speed should determined by angle of steering column
-  int speedMapped = map(arrowX-160, -160, 160, SPEED_MIN, SPEED_MAX);
-  int targetSpeed = speedPID.step(getSpeedSetpoint(speedMapped), speedMapped);
-  motor.write(targetSpeed);
+  //int speedMapped = map(arrowX-160, -160, 160, SPEED_MIN, SPEED_MAX);
+  //int targetSpeed = speedPID.step(getSpeedSetpoint(speedMapped), speedMapped);
+  setSpeed(1);
 
 
   // Clear Terminal
   delay(loopDelay);
-  SerialBT.write('\033[2J');
-  SerialBT.write('\033[1;1H');
 	loops++;
 }
