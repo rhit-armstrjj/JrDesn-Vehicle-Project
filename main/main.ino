@@ -25,7 +25,7 @@ uint32_t loopDelay = 70;
 #define STEERING_MIN 10
 #define STEERING_PIN 32
 Servo steering;
-float Ksp = 1, Ksi = 0.0, Ksd = 0, Hz = 1000/loopDelay;
+float Ksp = 0.72, Ksi = 0.0, Ksd = 0.03, Hz = 1000/loopDelay;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
 FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
@@ -34,7 +34,7 @@ FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned)
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
-float Kvp = 0.5, Kvi = 0.0, Kvd = 0;
+float Kvp = 0.65, Kvi = 0.04, Kvd = 0;
 int speedOutputBits = 7;
 bool speedOutputSigned = false;
 FastPID speedPID(Kvp, Kvi, Kvd, Hz, speedOutputBits, speedOutputSigned);
@@ -245,9 +245,9 @@ void setup()
   startup_steering(); 
   startup_huskylens(); 
 
-  //if (!ina219.begin(&Wire)) {
-    //SerialBT.printf("Failed to find INA219 chip\r\n");
-  //}
+  if (!ina219.begin(&Wire)) {
+    SerialBT.printf("Failed to find INA219 chip\r\n");
+  }
 
   SerialBT.println("################");
   SerialBT.println("Startup Complete");
@@ -266,15 +266,16 @@ void loop()
   int arrowX = getHuskyArrowX();
 
   // Map steering to center the arrow to the top of the screen
-  int steeringMapped = map(160-arrowX, -160, 160, -100, 100);
+  int steeringMapped = map(arrowX-160, -160, 160, -100, 100);
   SerialBT.print("Arrow X: ");
   SerialBT.println(steeringMapped);
-  setSteering(steeringMapped);
+  int steerPD = steeringPID.step(0, steeringMapped);
+  setSteering(steerPD);
 
   // feedback is mapped to arrow bc speed should determined by angle of steering column
   //int speedMapped = map(arrowX-160, -160, 160, SPEED_MIN, SPEED_MAX);
   //int targetSpeed = speedPID.step(getSpeedSetpoint(speedMapped), speedMapped);
-  setSpeed(1);
+  setSpeed(8);
 
 
   // Clear Terminal
