@@ -266,7 +266,7 @@ void loop()
   int arrowX = getHuskyArrowX();
 
   // Map steering to center the arrow to the top of the screen
-  int steeringMapped = map(arrowX-160, -160, 160, -100, 100);
+  int steeringMapped = arrowX-160;
   SerialBT.print("Arrow X: ");
   SerialBT.println(steeringMapped);
   int steerPD = steeringPID.step(0, steeringMapped);
@@ -275,7 +275,8 @@ void loop()
   // feedback is mapped to arrow bc speed should determined by angle of steering column
   //int speedMapped = map(arrowX-160, -160, 160, SPEED_MIN, SPEED_MAX);
   //int targetSpeed = speedPID.step(getSpeedSetpoint(speedMapped), speedMapped);
-  setSpeed(8);
+  int speed = map(abs(steeringMapped), 0, 160, 10, 4);
+  setSpeed(speed);
 
 
   // Clear Terminal
