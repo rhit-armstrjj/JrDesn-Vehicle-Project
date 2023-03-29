@@ -18,14 +18,14 @@
 /**
  * Control Loop
 */
-uint32_t loopDelay = 70;
+uint32_t loopDelay = 65;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
 #define STEERING_MIN 10
 #define STEERING_PIN 32
 Servo steering;
-float Ksp = 0.72, Ksi = 0.0, Ksd = 0.03, Hz = 1000/loopDelay;
+float Ksp = 0.70, Ksi = 0.0, Ksd = 0.00, Hz = 1000/loopDelay;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
 FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
@@ -177,7 +177,7 @@ int transmitStatusInfo() {
   getPowerInfo(&info);
 
   size_t length = SerialBT.printf(
-    "%d, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f\r\n",
+    "%d, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f|\r\n",
     millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
   );
   // for(int i = 0; i < errorLog.size(); i++) {
@@ -190,11 +190,12 @@ int transmitStatusInfo() {
  * For handling Huskylens issues.
 */
 int getHuskyArrowX() {
-  SerialBT.print("Request: ");
-  SerialBT.println(camera.request(1));
-  SerialBT.print("Available: ");
-  SerialBT.println(camera.available());
-  
+  Serial.print("Request: ");
+  bool res = camera.request(1);
+  Serial.println(res);
+  Serial.print("Available: ");
+  Serial.println(camera.available());
+
   HUSKYLENSResult arrow = camera.read();
   //printResult(arrow);
   return arrow.xTarget;
@@ -240,10 +241,10 @@ void setup()
     SerialBT.printf("Failed to find INA219 chip\r\n");
   }
 
-  SerialBT.println("################");
-  SerialBT.println("Startup Complete");
-  SerialBT.println("################");
-  SerialBT.println("time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW)");
+  SerialBT.println("####################");
+  SerialBT.println("# Startup Complete #");
+  SerialBT.println("####################");
+  SerialBT.println("time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW)|");
   delay(3900);
 }
 
@@ -259,16 +260,16 @@ void loop()
 
   // Map steering to center the arrow to the top of the screen
   int steeringMapped = arrowX-160;
-  SerialBT.print("Arrow X: ");
-  SerialBT.println(steeringMapped);
+  //SerialBT.print("Arrow X: ");
+  //SerialBT.println(steeringMapped);
   int steerPD = steeringPID.step(0, steeringMapped);
   setSteering(steerPD);
 
   // feedback is mapped to arrow bc speed should determined by angle of steering column
   //int speedMapped = map(arrowX-160, -160, 160, SPEED_MIN, SPEED_MAX);
   //int targetSpeed = speedPID.step(getSpeedSetpoint(speedMapped), speedMapped);
-  int speed = map(abs(steeringMapped), 0, 160, 10, 4);
-  setSpeed(speed);
+  //int speed = map(abs(steeringMapped), 0, 160, 10, 4);
+  setSpeed(10);
 
   transmitStatusInfo();
   // Clear Terminal

@@ -2,21 +2,25 @@ import serial
 import logging
 import argparse
 from datetime import datetime, timedelta
-import time
+import time, sys
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+handler = logging.StreamHandler(sys.stdout)
+handler.setLevel(logging.INFO)
+logger.addHandler(handler)
+
 def handle_data(port:serial.Serial):
-    file_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S Device Logs")
+    file_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S Device Logs.csv")
     logging.info("Creating file "+ file_name)
     with open(file_name, 'w') as logs:
         while True:
             data = port.read_all()
-            logging.info(data)
             if data is None:
                 continue
-            logs.write(str(data, encoding="ascii"));
+            logging.info(str(data, encoding="ascii").strip())
+            logs.write(str(data, encoding="ascii").strip().replace('|', '\r\n'))
             time.sleep(0.050)
     
 
@@ -33,7 +37,7 @@ if __name__ == '__main__':
     #pkeyGen.encryp_file('C:\\Users\\armstrjj\\workspace_v12\\ece230TermProjectZiemer&Armstrong\\python_app\\NeverGonnaGiveYouUp.txt', outfile='NeverGonnaGiveYouUp.hash')
     logger.info("Opening: COM"+str(args.port))
 
-    connection_time = timedelta(seconds=10)
+    connection_time = timedelta(seconds=30)
     init_time = datetime.now()
     while datetime.now() - init_time < connection_time:
         try:
