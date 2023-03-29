@@ -177,12 +177,12 @@ int transmitStatusInfo() {
   getPowerInfo(&info);
 
   size_t length = SerialBT.printf(
-    "##################\nTime: %d ms\r\nBus Voltage:   %f V\r\nShunt Voltage: %f mV\r\nLoad Voltage:  %f V\r\nCurrent:       %f mA\r\nPower: %f mW\r\n##########\r\n",
+    "%d, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f\r\n",
     millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
   );
-  for(int i = 0; i < errorLog.size(); i++) {
-    length += SerialBT.println(errorLog.at(i));
-  }
+  // for(int i = 0; i < errorLog.size(); i++) {
+  //   length += SerialBT.println(errorLog.at(i));
+  // }
   return length;
 }
 
@@ -196,18 +196,9 @@ int getHuskyArrowX() {
   SerialBT.println(camera.available());
   
   HUSKYLENSResult arrow = camera.read();
-  printResult(arrow);
+  //printResult(arrow);
   return arrow.xTarget;
 }
-
-/**
- * For mapping arrow target to steering.
- * Output should be between STEERING_MIN & STEERING_MAX
-*/
-int getSteeringSetpoint(int steeringMapped) {
-  // TODO Determine how steering should be given a setpoint.
-  return -1;
-} 
 
 /**
  * For mapping the speed based on the arrowX
@@ -252,7 +243,8 @@ void setup()
   SerialBT.println("################");
   SerialBT.println("Startup Complete");
   SerialBT.println("################");
-  delay(900);
+  SerialBT.println("time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW)");
+  delay(3900);
 }
 
 int loops = 0;
@@ -278,7 +270,7 @@ void loop()
   int speed = map(abs(steeringMapped), 0, 160, 10, 4);
   setSpeed(speed);
 
-
+  transmitStatusInfo();
   // Clear Terminal
   delay(loopDelay);
 	loops++;
