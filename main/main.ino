@@ -25,7 +25,7 @@ uint32_t loopDelay = 65;
 #define STEERING_MIN 10
 #define STEERING_PIN 32
 Servo steering;
-float Ksp = 0.70, Ksi = 0.0, Ksd = 0.00, Hz = 1000/loopDelay;
+float Ksp = 0.375, Ksi = 0.06, Ksd = 0.00, Hz = 1000/loopDelay;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
 FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
