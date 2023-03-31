@@ -18,7 +18,7 @@
 /**
  * Control Loop
 */
-uint32_t loopDelay = 65;
+uint32_t loopDelay = 60;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
@@ -53,6 +53,7 @@ String* device_name = new String("ECE362CarTeam07");
 BluetoothSerial SerialBT;
 const char *pin = "5188";
 std::vector<String> errorLog;
+boolean arrowLost = false;
 
 
 /******** CURRENT SENSOR **********/
@@ -113,7 +114,6 @@ void startup_huskylens() {
 */
 void init_bluetooth() {
   SerialBT.begin(*device_name);
-  SerialBT.printf("##########\nDevice Name: %s\n########", device_name->c_str());
   delay(100);
   
   #ifdef USE_PIN // Optional 
@@ -197,6 +197,12 @@ int getHuskyArrowX() {
   Serial.println(camera.available());
 
   HUSKYLENSResult arrow = camera.read();
+  
+  if(arrow.command != COMMAND_RETURN_ARROW) {
+    //Stop Car?
+    arrowLost = true;
+    return 160;
+  }
   //printResult(arrow);
   return arrow.xTarget;
 }
@@ -213,13 +219,13 @@ int getSpeedSetpoint(int arrowX) {
 
 void printResult(HUSKYLENSResult result){
     if (result.command == COMMAND_RETURN_BLOCK){
-        SerialBT.println(String()+F("Block:xCenter=")+result.xCenter+F(",yCenter=")+result.yCenter+F(",width=")+result.width+F(",height=")+result.height+F(",ID=")+result.ID);
+        SerialBT.println(String("#")+F("Block:xCenter=")+result.xCenter+F(",yCenter=")+result.yCenter+F(",width=")+result.width+F(",height=")+result.height+F(",ID=")+result.ID);
     }
     else if (result.command == COMMAND_RETURN_ARROW){
-        SerialBT.println(String()+F("Arrow:xOrigin=")+result.xOrigin+F(",yOrigin=")+result.yOrigin+F(",xTarget=")+result.xTarget+F(",yTarget=")+result.yTarget+F(",ID=")+result.ID);
+        SerialBT.println(String("#")+F("Arrow:xOrigin=")+result.xOrigin+F(",yOrigin=")+result.yOrigin+F(",xTarget=")+result.xTarget+F(",yTarget=")+result.yTarget+F(",ID=")+result.ID);
     }
     else{
-        SerialBT.println("Object unknown!");
+        SerialBT.println("# Object unknown!");
     }
 }
 /********* END HELPER FUNCTIONS *********/
@@ -238,13 +244,15 @@ void setup()
   startup_huskylens(); 
 
   if (!ina219.begin(&Wire)) {
-    SerialBT.printf("Failed to find INA219 chip\r\n");
+    SerialBT.printf("# Failed to find INA219 chip\r\n");
   }
 
   SerialBT.println("####################");
   SerialBT.println("# Startup Complete #");
   SerialBT.println("####################");
-  SerialBT.println("time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW)|");
+  SerialBT.printf("#{\n\"device_name\": \"%s\",\n", device_name->c_str());
+  SerialBT.printf("#  \"pid\": [%f,%f,%f]\n#}\n", Ksp, Ksi, Ksd);
+  SerialBT.println("#{\"csv\": \"\n time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW)\n");
   delay(3900);
 }
 
@@ -266,11 +274,13 @@ void loop()
   setSteering(steerPD);
 
   // feedback is mapped to arrow bc speed should determined by angle of steering column
-  //int speedMapped = map(arrowX-160, -160, 160, SPEED_MIN, SPEED_MAX);
-  //int targetSpeed = speedPID.step(getSpeedSetpoint(speedMapped), speedMapped);
-  //int speed = map(abs(steeringMapped), 0, 160, 10, 4);
-  setSpeed(10);
+  if(abs(steeringMapped) < 20) {
+    setSpeed(10);
+  } else {
+    setSpeed(5);
+  }
 
+  if(arrowLost) setSpeed(0);
   transmitStatusInfo();
   // Clear Terminal
   delay(loopDelay);

@@ -16,13 +16,16 @@ def handle_data(port:serial.Serial):
     file_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S Device Logs.csv")
     logging.info("Creating file "+ file_name)
     with open(file_name, 'w') as logs:
-        while True:
-            data = port.read_all()
-            if data is None:
-                continue
-            logging.info(str(data, encoding="ascii").strip())
-            logs.write(str(data, encoding="ascii").strip().replace('|', '\r\n')) # Tried to mitigate double lines
-            time.sleep(0.050)
+        try:
+            while True:
+                data = port.read_until()
+                if data is None:
+                    continue
+                logging.info(str(data, encoding="ascii").strip())
+                logs.write(str(data, encoding="ascii").strip()) # Tried to mitigate double lines
+                time.sleep(0.050)
+        except KeyboardInterrupt:
+            logs.write("#}")
     
 
 if __name__ == '__main__':
