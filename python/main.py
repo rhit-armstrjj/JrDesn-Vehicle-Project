@@ -12,6 +12,7 @@ handler.setLevel(logging.INFO)
 logger.addHandler(handler)
 
 def handle_data(port:serial.Serial):
+    """Infinite loop for the data over the serial port."""
     file_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S Device Logs.csv")
     logging.info("Creating file "+ file_name)
     with open(file_name, 'w') as logs:
@@ -20,12 +21,12 @@ def handle_data(port:serial.Serial):
             if data is None:
                 continue
             logging.info(str(data, encoding="ascii").strip())
-            logs.write(str(data, encoding="ascii").strip().replace('|', '\r\n'))
+            logs.write(str(data, encoding="ascii").strip().replace('|', '\r\n')) # Tried to mitigate double lines
             time.sleep(0.050)
     
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog="ECE230 Term Project Z&A Encryption Support",
+    parser = argparse.ArgumentParser(prog="ECE362 Project for Reading Telemetry from our project.",
     description="Helpers for running our project",
     epilog="Good luck!")
 
