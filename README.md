@@ -6,7 +6,7 @@
 
 1. Install the Arduino CLI & Arduino Extension for VSCode.
 2. Install Python 3.9+
-3. Install PuTTY
+3. Install PuTTY if you want to test
 4. Activate the Venv terminal if you want to get rid of the erorr squiggles.
 
 ## Usage
