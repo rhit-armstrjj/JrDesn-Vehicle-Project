@@ -31,11 +31,9 @@ if __name__ == '__main__':
     epilog="Good luck!")
 
     parser.add_argument("port")
-    # parser.add_argument("")
 
     args = parser.parse_args()
     
-    #pkeyGen.encryp_file('C:\\Users\\armstrjj\\workspace_v12\\ece230TermProjectZiemer&Armstrong\\python_app\\NeverGonnaGiveYouUp.txt', outfile='NeverGonnaGiveYouUp.hash')
     logger.info("Opening: COM"+str(args.port))
 
     connection_time = timedelta(seconds=30)
