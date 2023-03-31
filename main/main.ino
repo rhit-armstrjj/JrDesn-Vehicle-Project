@@ -102,7 +102,7 @@ void setSteering(int angle) {
 */
 void startup_huskylens() {
   while(!camera.begin(Wire)) {
-    SerialBT.println("Warning: Huskylens not connected. Retrying.");
+    SerialBT.println("# Warning: Huskylens not connected. Retrying.");
     delay(400);
   }
 
