@@ -1,52 +1,122 @@
 import serial
-import logging
+import serial.tools.list_ports
 import argparse
 from datetime import datetime, timedelta
 import time, sys
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
 
-handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.INFO)
-logger.addHandler(handler)
+from comm_link import CommLink
 
-def handle_data(port:serial.Serial):
-    """Infinite loop for the data over the serial port."""
-    file_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S Device Logs.csv")
-    logging.info("Creating file "+ file_name)
-    with open(file_name, 'w') as logs:
-        try:
-            while True:
-                data = port.read_until()
-                if data is None:
-                    continue
-                logging.info(str(data, encoding="ascii").strip())
-                logs.write(str(data, encoding="ascii").strip()) # Tried to mitigate double lines
-                time.sleep(0.050)
-        except KeyboardInterrupt:
-            logs.write("#}")
+from textual.app import App, ComposeResult
+from textual.containers import Container, Horizontal, Vertical
+import textual.widget as tw
+from textual.widgets import *
+from textual.reactive import reactive
+from textual import log
+
+CAR_LINK: CommLink = CommLink()
+
+class ControlPanel(tw.Widget):
+    """Layout for all the controls for the vehicle."""
+    """Needs: PID Steering Tuning, Current Speed Percentage, Current Race Time"""
+    """Needs: Camera Learned Status, Internal Drive State"""
     
+    def compose(self):
+        yield Label("Control Panel", classes="header")
+        # yield Button("Start", id="start", variant="success")
+        # yield Button("Stop", id="stop", variant="error")
+        # yield Input(placeholder="Ksp")
+        # yield Input(placeholder="Ksi")
+        # yield Input(placeholder="Ksd")
+        # yield TimeDisplay("00:00.00")
+
+class ConnectionSettings(Static):
+    """Lets user select the port to use."""
+
+    def compose(self) -> ComposeResult: 
+        with Container(classes="grid_item"): # ports
+            yield Label("Port:", classes="highlight")
+            yield OptionList(id="port-select")
+
+        with Vertical(classes="grid_item"): #Connection Settings
+            yield Label("Connection Settings:", classes="highlight")
+            with Horizontal():
+                yield Label("Baudrate:")
+                yield Input(placeholder="115200", id="baud_input", classes="form_data")
+            
+            with Horizontal():
+                yield Label("Stop Bits: ")
+                yield Input(placeholder="0, 1, 2", id="stopb_input", classes="form_data")
+
+            with Horizontal():
+                yield Label("Parity Enable: ")
+                yield Switch(id="parity_en_sw", classes="form_data")
+                yield Label("Odd Parity:", classes="parity_dep")
+                yield Switch(id="parity_sw", classes="parity_dep form_data", disabled=True)
+
+        with Vertical(classes="grid_item"): # Connection Status
+            with Horizontal():
+                yield Label("Connection Status: ")
+                yield Label("Disconnected", classes="error", id="conn_status")
+
+        with Vertical(classes="grid_item", id="connect_button"):
+            yield Button("Connect!", id="connect_button")
+            yield LoadingIndicator()
+
+        return
+
+    def on_mount(self) -> None:
+        ports = self.query_one(OptionList)
+        for port in serial.tools.list_ports.comports():
+            ports.add_option(port.name)
+
+    def on_switch_changed(self, event: Switch.Changed):
+        if event.switch.id == "parity_en_sw":
+            options = self.query(Switch).filter('.parity_dep')
+            for sw in options.results():
+                sw.disabled = not sw.disabled
+            event.stop()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        ind = self.query_one(LoadingIndicator)
+        button = self.query_one(Button)
+        ind.display = not ind.display
+        button.display = not button.display
+
+        # Await connection
+
+        event.stop()
+
+
+class CarControlApp(App):
+
+    CSS_PATH = "css/app.css"
+    TITLE = "Car Controller"
+
+    BINDINGS = []
+
+    def compose(self) -> ComposeResult:
+        """Create child widgets for the app."""
+        yield Header()
+        yield Footer()
+
+        with Horizontal(id="buttons"):  
+            yield Button("Connection Settings", id="ports")  
+            yield Button("Control Panel", id="panel") 
+
+        with ContentSwitcher(initial="ports"):
+            yield ConnectionSettings(id = "ports")
+            yield ControlPanel(id = "panel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        switcher = self.query_one(ContentSwitcher)
+        b_id = event.button.id
+        if b_id is None:
+            return
+        
+        if not switcher.get_child_by_id(b_id) is None:
+            switcher.current = b_id
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog="ECE362 Project for Reading Telemetry from our project.",
-    description="Helpers for running our project",
-    epilog="Good luck!")
-
-    parser.add_argument("port")
-
-    args = parser.parse_args()
-    
-    logger.info("Opening: COM"+str(args.port))
-
-    connection_time = timedelta(seconds=30)
-    init_time = datetime.now()
-    while datetime.now() - init_time < connection_time:
-        try:
-            with serial.Serial('COM'+str(args.port), 115200, timeout=0.5, parity=serial.PARITY_NONE, rtscts=True, xonxoff=True) as port:
-                handle_data(port);
-        
-        except serial.SerialException:
-            print("Could not open port. Retrying")
-
-    exit()
+    app = CarControlApp()
+    app.run()

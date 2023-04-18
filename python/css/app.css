@@ -1,0 +1,78 @@
+Screen {
+    align: center middle;
+    overflow: hidden;
+}
+
+Horizontal {
+    align: center middle;
+}
+
+.grid_item {
+    margin: 1;
+    background: $boost;
+    border: $secondary;
+    height: 20;
+    content-align: left top;
+}
+
+.grid_item Input {
+    padding: 0;
+    margin:0;
+}
+
+.grid_item LoadingIndicator {
+    display: none;
+}
+
+.highlight {
+    text-style: bold;
+}
+
+.grid_item Horizontal {
+    align: left top;
+}
+
+ControlPanel {
+    background: $boost;
+    height: 5;
+    margin: 1;
+    min-width: 50;
+    padding: 1;
+}
+
+ConnectionSettings {
+    background: $boost;
+    layout: grid;
+    grid-size: 3 2;
+    height: auto;
+    min-height: 20;
+    min-width: 50;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+#buttons {
+    margin-top: 1;
+    height: 2;
+    width: auto;
+    margin-right: 1;
+}
+
+#port-select {
+    padding: 0;
+    border: round $primary;
+    row-span: 2;
+    height: auto;
+}
+
+#connect_button {
+    color: $primary;
+    column-span: 3;
+    align: center middle;
+
+}
+
+#connect_button Button {
+    width: 40;
+    color: green;
+}

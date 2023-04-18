@@ -1,3 +1,5 @@
+
+
 /*
 * Authors: Jake Armstrong, Garrett Hart
 * Date: 3/23/2023
@@ -5,7 +7,6 @@
 #include <analogWrite.h>
 #include <ESP32PWM.h>
 #include <ESP32Servo.h>
-#include <ESP32Tone.h>
 #include <FastPID.h>
 #include <FRAM_RINGBUFFER.h>
 #include <FRAM.h>
@@ -14,30 +15,30 @@
 #include "BluetoothSerial.h"
 #include "HUSKYLENS.h"
 #include <vector>
+#include <MsgPacketizer.h>
+#include <MsgPack.h>
+#include <Adafruit_EEPROM_I2C.h>
+#include <Adafruit_FRAM_I2C.h>
 
 /**
  * Control Loop
 */
 uint32_t loopDelay = 60;
+float Ksp = 0.375, Ksi = 0.06, Ksd = 0.00, Hz = 1000/loopDelay;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
 #define STEERING_MIN 10
 #define STEERING_PIN 32
 Servo steering;
-float Ksp = 0.375, Ksi = 0.06, Ksd = 0.00, Hz = 1000/loopDelay;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
-FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
+FastPID steeringPID;
 
 #define SPEED_MIN 49
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
-float Kvp = 0.65, Kvi = 0.04, Kvd = 0;
-int speedOutputBits = 7;
-bool speedOutputSigned = false;
-FastPID speedPID(Kvp, Kvi, Kvd, Hz, speedOutputBits, speedOutputSigned);
 
 
 /******** BLEUTOOTH **********/
@@ -65,8 +66,30 @@ HUSKYLENS camera;
 #define HUSKY_SCL 22
 #define HUSKY_ADR 0x32
 
+/******** FRAM *********/
+#define FRAM_ADR 0x50
+Adafruit_EEPROM_I2C fram;
 
-//TODO: Setup FRAM for logging power.
+/**
+ * Internal States
+ * State Definitions:
+ *  - waiting: Idle, not moving.
+ *  - startRace: captures current time in millis and transitions to driving.
+ *  - driving: captures current time.
+ * 
+*/
+enum State {
+  Waiting = 0,
+  StartRace = 1,
+  Driving = 2,
+};
+
+int state = 0; 
+bool newState = false;
+unsigned long driveTime = 0;
+unsigned long startDriveTime = 0;
+
+//TODO: Setup FRAM for saving states.
 /*******/
 
 /********* BEGIN HELPER FUNCTIONS **********/
@@ -84,11 +107,13 @@ void startup_motor() {
  * Sets up Steering servo.
 */
 void startup_steering() {
+  // Load Ksp, Ksi, & Ksd from FRAM
+
+  steeringPID = FastPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
   steering.attach(STEERING_PIN);
   steering.write(90);
 
 }
-
 
 /**
  * Sets the steering angle from -100 to 100
@@ -150,8 +175,9 @@ struct PowerInfo {
   float current;
   float loadVoltage;
   float power;
+  MSGPACK_DEFINE(shuntVoltage, busVoltage, current, loadVoltage, power);
 };
-
+PowerInfo currentPower;
 
 /**
  * Handles getting power info.
@@ -169,21 +195,35 @@ void getPowerInfo(struct PowerInfo *data) {
   };
 }
 
-/**
- * Writes telemetry to screen. Needs to write status messages
-*/
-int transmitStatusInfo() {
-  struct PowerInfo info;
-  getPowerInfo(&info);
+/********** FRAM HELPERS **********/
+float readFloatFromFRAM(int idx) {
+  float f; 
+  uint8_t buffer[4];
+  fram.read(idx*sizeof(float), buffer, sizeof(float));
 
-  size_t length = SerialBT.printf(
-    "%d, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f|\r\n",
-    millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
-  );
-  // for(int i = 0; i < errorLog.size(); i++) {
-  //   length += SerialBT.println(errorLog.at(i));
-  // }
-  return length;
+  memcpy((void *) &f, buffer, 4);
+  return f;
+}
+
+void writeFloatToFRAM(int idx, float f) {
+  uint8_t buffer[4];
+  memcpy(buffer, (void *) &f, 4);
+  fram.write(idx*sizeof(float), buffer, sizeof(float));
+}
+
+void initFRAM() {
+
+  fram.begin(FRAM_ADR);
+  // Load default if no data in FRAM.
+  if(readFloatFromFRAM(0) == 0) {
+    writeFloatToFRAM(0, Ksp);
+    writeFloatToFRAM(1, Ksi);
+    writeFloatToFRAM(2, Ksd);
+  } else {
+    Ksp = readFloatFromFRAM(0);
+    Ksi = readFloatFromFRAM(1);
+    Ksd = readFloatFromFRAM(2);
+  }
 }
 
 /**
@@ -228,9 +268,45 @@ void printResult(HUSKYLENSResult result){
         SerialBT.println("# Object unknown!");
     }
 }
+
+/**
+ * Starts the Race
+*/
+void startRaceLoop() {
+  startDriveTime = millis();
+  state = Driving;
+}
+
+/**
+ * Driving State for Car
+*/
+void driveStateLoop() {
+    //Arrow x is between 0 320
+  int arrowX = getHuskyArrowX();
+
+  // Map steering to center the arrow to the top of the screen
+  int steeringMapped = arrowX-160;
+  //SerialBT.print("Arrow X: ");
+  //SerialBT.println(steeringMapped);
+  int steerPD = steeringPID.step(0, steeringMapped);
+  setSteering(steerPD);
+  // feedback is mapped to arrow bc speed should determined by angle of steering column
+  if(abs(steeringMapped) < 20) {
+    setSpeed(10);
+  } else {
+    setSpeed(5);
+  }
+  if(arrowLost) setSpeed(0);
+  driveTime = millis() - startDriveTime;
+  if(driveTime >= 90000) state = Waiting; 
+}
+
+void waitingStateLoop() {
+  setSpeed(0);
+  setSteering(0);
+  driveTime = 0;
+}
 /********* END HELPER FUNCTIONS *********/
-
-
 
 /******** ARDUINO SETUP FUNCTION **********/
 void setup()
@@ -241,48 +317,67 @@ void setup()
   init_bluetooth();
   startup_motor();
   startup_steering(); 
-  startup_huskylens(); 
+  startup_huskylens();
 
-  if (!ina219.begin(&Wire)) {
-    SerialBT.printf("# Failed to find INA219 chip\r\n");
-  }
 
-  SerialBT.println("####################");
-  SerialBT.println("# Startup Complete #");
-  SerialBT.println("####################");
-  SerialBT.printf("#{\n\"device_name\": \"%s\",\n", device_name->c_str());
-  SerialBT.printf("#  \"pid\": [%f,%f,%f]\n#}\n", Ksp, Ksi, Ksd);
-  SerialBT.println("#{\"csv\": \"\n time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW)\n");
-  delay(3900);
+  state = Waiting;
+  MsgPacketizer::publish(SerialBT, 0x34, Ksp, Ksi, Ksd, state, driveTime, currentPower);
+  MsgPacketizer::subscribe(SerialBT, 0x12, Ksp, Ksi, Ksd, state, driveTime, currentPower);
+
+  // Loop 2
+  xTaskCreatePinnedToCore(
+    (TaskFunction_t) loop2,
+    "TELEMETRY",
+    500,
+    NULL,
+    tskIDLE_PRIORITY,
+    NULL,
+    0
+  );
 }
 
-int loops = 0;
 /******** ARDUINO LOOP FUNCTION **********/
 void loop()
 {
   // Telemetry Transmission
   //int powerSize = transmitStatusInfo();
 
-  //Arrow x is between 0 320
-  int arrowX = getHuskyArrowX();
+  switch(state) {
+    case StartRace:
+      startRaceLoop();
+    case Driving:
+      driveStateLoop();
+      break;
 
-  // Map steering to center the arrow to the top of the screen
-  int steeringMapped = arrowX-160;
-  //SerialBT.print("Arrow X: ");
-  //SerialBT.println(steeringMapped);
-  int steerPD = steeringPID.step(0, steeringMapped);
-  setSteering(steerPD);
-
-  // feedback is mapped to arrow bc speed should determined by angle of steering column
-  if(abs(steeringMapped) < 20) {
-    setSpeed(10);
-  } else {
-    setSpeed(5);
+    case Waiting:
+    default:
+      state = Waiting;
+      waitingStateLoop();
+      break;
   }
-
-  if(arrowLost) setSpeed(0);
-  transmitStatusInfo();
+  
   // Clear Terminal
   delay(loopDelay);
-	loops++;
 }
+
+void telemetryLoop() {
+  getPowerInfo(&currentPower);
+  MsgPacketizer::update();
+  
+  //Update FRAM
+  writeFloatToFRAM(0, Ksp);
+  writeFloatToFRAM(1, Ksi);
+  writeFloatToFRAM(2, Ksd);  
+
+}
+
+TaskFunction_t loop2() {
+  while(1) {
+    
+    telemetryLoop();
+
+  }
+
+}
+
+
