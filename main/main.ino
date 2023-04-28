@@ -227,7 +227,8 @@ void initFRAM() {
 }
 
 /**
- * For handling Huskylens issues.
+ * For handling requests to Huskylens and updates arrow state.
+ * Stops car if arrow is lost.
 */
 int getHuskyArrowX() {
   Serial.print("Request: ");
@@ -301,6 +302,9 @@ void driveStateLoop() {
   if(driveTime >= 90000) state = Waiting; 
 }
 
+/**
+ * Idle state for car. Motors are actively off.
+*/
 void waitingStateLoop() {
   setSpeed(0);
   setSteering(0);
