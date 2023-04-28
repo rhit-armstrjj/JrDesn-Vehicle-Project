@@ -19,13 +19,16 @@
  * Control Loop
 */
 uint32_t loopDelay = 60;
+uint32_t startRaceTime = 0;
+int sysArrowX = 0;
+int sysSteerPD = 0;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
 #define STEERING_MIN 10
 #define STEERING_PIN 32
 Servo steering;
-float Ksp = 0.375, Ksi = 0.06, Ksd = 0.00, Hz = 1000/loopDelay;
+float Ksp = 0.405, Ksi = 0.065, Ksd = 0.00, Hz = 1000/loopDelay;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
 FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
@@ -177,8 +180,8 @@ int transmitStatusInfo() {
   getPowerInfo(&info);
 
   size_t length = SerialBT.printf(
-    "%d, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f|\r\n",
-    millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power
+    "%d, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f, %d, %d|\r\n",
+    millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power, sysArrowX,sysSteerPD
   );
   // for(int i = 0; i < errorLog.size(); i++) {
   //   length += SerialBT.println(errorLog.at(i));
@@ -252,8 +255,10 @@ void setup()
   SerialBT.println("####################");
   SerialBT.printf("#{\n\"device_name\": \"%s\",\n", device_name->c_str());
   SerialBT.printf("#  \"pid\": [%f,%f,%f]\n#}\n", Ksp, Ksi, Ksd);
-  SerialBT.println("#{\"csv\": \"\n time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW)\n");
+  SerialBT.println("#{\"csv\": \"\n time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW), arrowX (px), steering (degrees?) \n");
   delay(3900);
+
+  startRaceTime = millis();
 }
 
 int loops = 0;
@@ -268,19 +273,22 @@ void loop()
 
   // Map steering to center the arrow to the top of the screen
   int steeringMapped = arrowX-160;
+  sysArrowX = steeringMapped;
   //SerialBT.print("Arrow X: ");
   //SerialBT.println(steeringMapped);
   int steerPD = steeringPID.step(0, steeringMapped);
+  sysSteerPD = steerPD;
   setSteering(steerPD);
 
   // feedback is mapped to arrow bc speed should determined by angle of steering column
-  if(abs(steeringMapped) < 20) {
-    setSpeed(10);
+  if(abs(steeringMapped) < 40) {
+    setSpeed(4);
   } else {
-    setSpeed(5);
+    setSpeed(3);
   }
 
-  if(arrowLost) setSpeed(0);
+  //if(arrowLost) setSpeed(0);
+  if(millis() > startRaceTime + 90000) setSpeed(0);
   transmitStatusInfo();
   // Clear Terminal
   delay(loopDelay);
