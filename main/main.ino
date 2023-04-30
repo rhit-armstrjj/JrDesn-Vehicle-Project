@@ -16,12 +16,31 @@
 #include <vector>
 
 /**
+ * Power Info
+ * Shunt Voltage: mV
+ * busVoltage: V
+ * current: mA
+ * loadVoltage: V
+ * power: mW
+*/
+struct PowerInfo {
+  float shuntVoltage;
+  float busVoltage;
+  float current;
+  float loadVoltage;
+  float power;
+};
+
+/**
  * Control Loop
 */
-uint32_t loopDelay = 60;
+uint32_t loopDelay = 50;
 uint32_t startRaceTime = 0;
 int sysArrowX = 0;
 int sysSteerPD = 0;
+struct PowerInfo info;
+unsigned long delayTotal = 0; // Loop delay.
+int loops = 0; // Counting loops
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
@@ -37,10 +56,11 @@ FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned)
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
-float Kvp = 0.65, Kvi = 0.04, Kvd = 0;
+float Kvp = 0.3, Kvi = 0.0, Kvd = 0;
 int speedOutputBits = 7;
 bool speedOutputSigned = false;
 FastPID speedPID(Kvp, Kvi, Kvd, Hz, speedOutputBits, speedOutputSigned);
+int currentSpeed = 0;
 
 
 /******** BLEUTOOTH **********/
@@ -89,7 +109,6 @@ void startup_motor() {
 void startup_steering() {
   steering.attach(STEERING_PIN);
   steering.write(90);
-
 }
 
 
@@ -129,32 +148,19 @@ void init_bluetooth() {
 /**
  * Set speed by percentage.
 */
-void setSpeed(int speed) {
-    if(speed < 0 || speed > 100) return;
-    if(speed == 0) {
+void setSpeed(int settingSpeed) {
+
+    if(settingSpeed < 0 || settingSpeed > 100) return;
+    if(settingSpeed == 0) {
       motor.write(0);
       return;
     }
-    int val = map(speed, 1, 100, SPEED_MIN, SPEED_MAX);
+
+    currentSpeed = speedPID.step(settingSpeed, currentSpeed);
+
+    int val = map(settingSpeed, 1, 100, SPEED_MIN, SPEED_MAX);
     motor.write(val);
 }
-
-/**
- * Power Info
- * Shunt Voltage: mV
- * busVoltage: V
- * current: mA
- * loadVoltage: V
- * power: mW
-*/
-struct PowerInfo {
-  float shuntVoltage;
-  float busVoltage;
-  float current;
-  float loadVoltage;
-  float power;
-};
-
 
 /**
  * Handles getting power info.
@@ -176,12 +182,11 @@ void getPowerInfo(struct PowerInfo *data) {
  * Writes telemetry to screen. Needs to write status messages
 */
 int transmitStatusInfo() {
-  struct PowerInfo info;
   getPowerInfo(&info);
 
   size_t length = SerialBT.printf(
-    "%d, %5.3f, %5.3f, %5.3f, %5.3f, %5.3f, %d, %d|\r\n",
-    millis(), info.busVoltage, info.shuntVoltage, info.loadVoltage, info.current, info.power, sysArrowX,sysSteerPD
+    "%d, %d, %5.3f, %5.3f, %5.3f, %d |\r\n",
+    millis(), loops, info.busVoltage, info.current, info.power, delayTotal
   );
   // for(int i = 0; i < errorLog.size(); i++) {
   //   length += SerialBT.println(errorLog.at(i));
@@ -202,7 +207,7 @@ int getHuskyArrowX() {
   HUSKYLENSResult arrow = camera.read();
   
   if(arrow.command != COMMAND_RETURN_ARROW) {
-    //Stop Car?
+    //Stop Car? no
     arrowLost = true;
     return 160;
   }
@@ -228,7 +233,7 @@ void printResult(HUSKYLENSResult result){
         SerialBT.println(String("#")+F("Arrow:xOrigin=")+result.xOrigin+F(",yOrigin=")+result.yOrigin+F(",xTarget=")+result.xTarget+F(",yTarget=")+result.yTarget+F(",ID=")+result.ID);
     }
     else{
-        SerialBT.println("# Object unknown!");
+        SerialBT.println("# Object unknown!|");
     }
 }
 /********* END HELPER FUNCTIONS *********/
@@ -250,47 +255,46 @@ void setup()
     SerialBT.printf("# Failed to find INA219 chip\r\n");
   }
 
-  SerialBT.println("####################");
-  SerialBT.println("# Startup Complete #");
-  SerialBT.println("####################");
-  SerialBT.printf("#{\n\"device_name\": \"%s\",\n", device_name->c_str());
-  SerialBT.printf("#  \"pid\": [%f,%f,%f]\n#}\n", Ksp, Ksi, Ksd);
-  SerialBT.println("#{\"csv\": \"\n time (ms), bus_voltage (mV), shunt_voltage (V), load_voltage (V), total_current (mA), power (mW), arrowX (px), steering (degrees?) \n");
+  SerialBT.println("####################|");
+  SerialBT.println("# Startup Complete #|");
+  SerialBT.println("####################|");
+  SerialBT.printf("#{\n\"device_name\": \"%s\",|\n", device_name->c_str());
+  SerialBT.printf("#  \"pid\": [%f,%f,%f]|\n#}|\n", Ksp, Ksi, Ksd);
+  SerialBT.println("#{\"csv\": \"|\n time (ms), packet_id, bus voltage (V), total_current (mA), power (mW), loop time (ms) | \n");
   delay(3900);
 
   startRaceTime = millis();
 }
 
-int loops = 0;
 /******** ARDUINO LOOP FUNCTION **********/
 void loop()
 {
   // Telemetry Transmission
   //int powerSize = transmitStatusInfo();
-
+  uint32_t loopTime = millis();
   //Arrow x is between 0 320
   int arrowX = getHuskyArrowX();
 
   // Map steering to center the arrow to the top of the screen
   int steeringMapped = arrowX-160;
-  sysArrowX = steeringMapped;
-  //SerialBT.print("Arrow X: ");
-  //SerialBT.println(steeringMapped);
+  sysArrowX = steeringMapped; // logging.
   int steerPD = steeringPID.step(0, steeringMapped);
-  sysSteerPD = steerPD;
+  sysSteerPD = steerPD; //Logging.
   setSteering(steerPD);
 
   // feedback is mapped to arrow bc speed should determined by angle of steering column
   if(abs(steeringMapped) < 40) {
-    setSpeed(4);
+    setSpeed(4 * (8/info.busVoltage));
   } else {
-    setSpeed(3);
+    setSpeed(1 * (8/info.busVoltage));
   }
 
-  //if(arrowLost) setSpeed(0);
-  if(millis() > startRaceTime + 90000) setSpeed(0);
+  if(millis() > startRaceTime + 90000) setSpeed(0); //stop after 90s
+
   transmitStatusInfo();
-  // Clear Terminal
-  delay(loopDelay);
+  delayTotal = loopDelay - (millis() - loopTime);
+  if(delayTotal > loopDelay) delayTotal = 0;
+  delay(delayTotal);
+  
 	loops++;
 }
