@@ -21,11 +21,12 @@ def handle_data(port:serial.Serial):
                 data = port.read_until()
                 if data is None:
                     continue
-                logging.info(str(data, encoding="ascii").strip())
-                logs.write(str(data, encoding="ascii").strip()) # Tried to mitigate double lines
+                logging.info(str(data, encoding="ascii").strip().replace('|',''))
+                logs.write(str(data, encoding="ascii").strip().replace('|', "\n")) # Tried to mitigate double lines
                 time.sleep(0.050)
         except KeyboardInterrupt:
             logs.write("#}")
+            logging.info("Logging Ended.")
     
 
 if __name__ == '__main__':
