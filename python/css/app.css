@@ -20,7 +20,7 @@ Horizontal {
     margin:0;
 }
 
-.grid_item LoadingIndicator {
+.grid_item ProgressBar {
     display: none;
 }
 

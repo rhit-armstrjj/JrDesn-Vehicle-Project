@@ -1,3 +1,5 @@
+import asyncio
+
 import serial
 import serial.tools.list_ports
 import argparse
@@ -61,7 +63,7 @@ class ConnectionSettings(Static):
 
         with Vertical(classes="grid_item", id="connect_button"):
             yield Button("Connect!", id="connect_button")
-            yield LoadingIndicator()
+            yield ProgressBar()
 
         return
 
@@ -77,14 +79,21 @@ class ConnectionSettings(Static):
                 sw.disabled = not sw.disabled
             event.stop()
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        ind = self.query_one(LoadingIndicator)
+    def toggle_indicator(self):
+        prog = self.query_one(ProgressBar)
         button = self.query_one(Button)
-        ind.display = not ind.display
+        #ind.display = not ind.display
+        prog.display = not prog.display
         button.display = not button.display
 
-        # Await connection
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        
+        self.toggle_indicator()
 
+        # Add worker that awaits connection
+
+        self.set_timer(5.0, self.toggle_indicator)
+        # Await connection
         event.stop()
 
 
@@ -117,6 +126,7 @@ class CarControlApp(App):
         if not switcher.get_child_by_id(b_id) is None:
             switcher.current = b_id
 
+# Entrypoint
 if __name__ == '__main__':
     app = CarControlApp()
     app.run()
