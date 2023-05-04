@@ -32,6 +32,14 @@ Horizontal {
     align: left top;
 }
 
+.error {
+    color: red;
+}
+
+.success {
+    color: green;
+}
+
 ControlPanel {
     background: $boost;
     height: 5;
@@ -65,14 +73,17 @@ ConnectionSettings {
     height: auto;
 }
 
-#connect_button {
+#connect_button_box {
     color: $primary;
     column-span: 3;
     align: center middle;
 
 }
 
-#connect_button Button {
-    width: 40;
-    color: green;
+#connect_button {
+    width: 40;   
+    color: green;   
+}
+#connect_button .error {
+    color: red;
 }

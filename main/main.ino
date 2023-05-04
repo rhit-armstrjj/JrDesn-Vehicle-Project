@@ -1,5 +1,3 @@
-
-
 /*
 * Authors: Jake Armstrong, Garrett Hart
 * Date: 3/23/2023
@@ -345,7 +343,6 @@ void loop()
 {
   // Telemetry Transmission
   //int powerSize = transmitStatusInfo();
-
   switch(state) {
     case StartRace:
       startRaceLoop();

@@ -2,6 +2,10 @@
 
 ECE362 Code for 2023
 
+Assumptions about the project:
+
+- The bluetooth communications will always be in range, and will therefore, have no drop.
+
 ## Arduino
 
 ### Setting Up
