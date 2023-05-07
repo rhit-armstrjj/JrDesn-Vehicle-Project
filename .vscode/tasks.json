@@ -5,8 +5,7 @@
     "tasks": [
         {
             "label": "Upload Code",
-            "command":"${command:arduino.upload}",
-            
+            "command": "${command:arduino.upload}"
         },
         {
             "label": "Start Logging",
@@ -16,13 +15,16 @@
             "presentation": {
                 "reveal": "always",
                 "panel": "new"
-            },
+            }
         },
         {
             "label": "Upload & Start Logging",
-            "group": "build",  
-            "dependsOn":["Upload Code", "Start Logging"],
-            "dependsOrder": "sequence",
-        },
+            "group": "build",
+            "dependsOn": [
+                "Upload Code",
+                "Start Logging"
+            ],
+            "dependsOrder": "sequence"
+        }
     ]
 }
