@@ -164,11 +164,8 @@ class ConnectionSettings(Static):
         if not stopb.value.strip().isnumeric():
             raise ValueError("The number of stopbits is not numeric.")
         
-        
         parity_en = self.query_one("#parity_en_sw")
         parity = self.query_one("#parity_sw")
-
-
 
         count = 0
 
@@ -177,7 +174,7 @@ class ConnectionSettings(Static):
             time.sleep(2)
             count += 1
 
-        raise ValueError("Get Good")
+        raise NotImplementedError("The connection_worker method has not been completely implemented yet.")
         # self.app.call_from_thread(self.set_connected_state, False)
 
     def handle_connection(self):
