@@ -26,6 +26,8 @@ This project uses `venv` for it's dependencies. To enter the virtual environment
 Once activated, there should be a little `(python)` at the start of your terminal.
 If you don't see that, you might want to consult this [StackOverflow](https://stackoverflow.com/questions/18713086/virtualenv-wont-activate-on-windows) q&a.
 
+On your first install, run `pip install -r ./python/requirements.txt`
+
 To leave the virtual environment, just run `deactivate`.
 
 Ideally, everything should be in the repository already so you do not need to install anything (Yay!).
@@ -33,6 +35,8 @@ Ideally, everything should be in the repository already so you do not need to in
 ### Python Usage
 
 To run the program you can just run `python ./python/main.py`. However, if you are editing CSS, I would recommend using `textual run ./python/main.py` because that allows for live-viewing changes.
+
+If you want to debug textual, run `textual console` in one terminal, and then open in another terminal `textual run --dev ./python/main.py`. This will give you a live console from Textual.
 
 ## Technologies Used
 
