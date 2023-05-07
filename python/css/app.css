@@ -20,10 +20,6 @@ Horizontal {
     margin:0;
 }
 
-.grid_item ProgressBar {
-    display: none;
-}
-
 .highlight {
     text-style: bold;
 }
@@ -77,13 +73,22 @@ ConnectionSettings {
     color: $primary;
     column-span: 3;
     align: center middle;
+    content-align: center middle;
 
 }
 
 #connect_button {
     width: 40;   
-    color: green;   
 }
-#connect_button .error {
-    color: red;
+
+#error_text_container {
+    visibility: hidden;
+    content-align: center middle;
+}
+
+.succ {
+    color: green;
+}
+.warning {
+    color: orange;
 }

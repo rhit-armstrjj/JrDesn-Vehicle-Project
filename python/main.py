@@ -12,17 +12,11 @@ from textual import log
 
 from textual import work
 from textual.message import Message
-from textual.worker import Worker, get_current_worker
+from textual.worker import Worker, get_current_worker, WorkerState
 
-device_link: VehicleLink
-
-class ValidationError(Message):
-    def __init__(self, message:str) -> None:
-        self.message = message
-
-class SerialError(Message):
-    def __init__(self, message:str) -> None:
-        self.message = message
+import msgpack
+import time
+import threading
 
 class ControlPanel(tw.Widget):
     """Layout for all the controls for the vehicle."""
@@ -42,13 +36,32 @@ class ConnectionSettings(Static):
     """Lets user select the port to use."""
 
     selected_port: str|None = None
+    try_connecting: bool = False
 
-    bt_port: serial.Serial = serial.Serial()
+    connection_handle: Worker = None
+    connection_handle_lock: threading.Lock = threading.Lock()
 
-    class VehicleStatusUpdate(Message):
-        def __init__(self, payload, conn_status):
-            self.payload = payload
-            self.conn_status = conn_status
+    def set_connected_state(self, connected:bool) -> None:
+        button:Button = self.query_one('#connect_button')
+        if connected:
+            button.label = "Disconnect"
+            button.remove_class("succ")
+            button.add_class("warning")
+        else:
+            button.label = "Connect!"
+            button.add_class("succ")            
+            button.remove_class("warning")
+
+    def set_error_text_state(self, text:str|None) -> None:
+        error_text_container: Horizontal = self.query_one("#error_text_container")
+        error_text: Label = self.query_one("#error_text_label")
+
+        if text is None:
+            error_text_container.visible = False
+        else:
+            error_text.update(text)
+            error_text_container.visible = True
+            
 
     def compose(self) -> ComposeResult: 
         with Container(classes="grid_item"): # ports
@@ -73,15 +86,18 @@ class ConnectionSettings(Static):
 
         with Vertical(classes="grid_item"): # Connection Status
             with Horizontal():
-                yield Label("Connection Status: ")
-                yield Label("Disconnected", classes="error", id="conn_status")
+                pass
             yield Label(id="conn_settings")
 
         with Vertical(classes="grid_item", id="connect_button_box"):
-            yield Button("Connect!", id="connect_button")
-            yield ProgressBar(show_percentage=False, show_eta=False)
+            yield Button("Connect!", id="connect_button", classes="succ")
+            with Horizontal(id="error_text_container"):
+                yield Label("Error: ")
+                yield Label("", classes="error", id="error_text_label")
 
         return
+
+    ### EVENTS
 
     def on_mount(self) -> None:
         ports = self.query_one(OptionList)
@@ -100,90 +116,53 @@ class ConnectionSettings(Static):
         log("Selected Port: ", self.selected_port)
         event.stop()
 
-    def __toggle_indicator(self):
-        prog = self.query_one(ProgressBar)
-        button = self.query_one(Button)
-        #ind.display = not ind.display
-        prog.display = not prog.display
-        button.display = not button.display
-
-    def __check_status(self):
-        status_label:Label = self.query_one("#conn_status") # type: ignore
-        connect_button:Button = self.query_one("#connect_button") #type: ignore
-        
-        log("Checking Status")
-        self.__toggle_indicator()
-        if self.bt_port.is_open:
-            status_label.remove_class('error')
-            status_label.add_class('success')
-            connect_button.add_class('error')
-            connect_button.label = "Disconnect"
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.name == 'connection_worker':
+            if event.state != WorkerState.SUCCESS:
+                self.set_connected_state(False)
             
-        else:
-            status_label.add_class('error')
-            status_label.remove_class('success')
-            connect_button.remove_class('error')
-            connect_button.label = "Connect!"
-
-    @work(exit_on_error=False) # type: ignore
-    def connect_to_car(self):
-        pb = self.query_one(ProgressBar)
-        self.app.call_from_thread(self.__toggle_indicator)
-
-        pb.advance(1)
-
-        baud_box:Input = self.query_one("#baud_input") # type: ignore
-        stop_box:Input = self.query_one("#stopb_input") #type: ignore
-
-        parity_en_check:Switch = self.query_one("#parity_en_sw")  # type: ignore
-        parity_odd_check:Switch = self.query_one("#parity_sw") # type: ignore
-
-        pb.advance(4)
-
-        self.bt_port.port = self.selected_port
-
-        #TODO Actually handle when error is raised.
-        
-        if not baud_box.value.isnumeric():
-            raise ValueError('Alphabetical Characters in Baudrate')
-        
-        if not stop_box.value.isnumeric():
-            raise ValueError('Alphabetical Characters in Stop Bits')
-        
-        self.bt_port.baudrate = int(baud_box.value)
-
-        if parity_en_check.value:
-            if parity_odd_check.value:
-                self.bt_port.parity = serial.PARITY_ODD
-            else:
-                self.bt_port.parity = serial.PARITY_EVEN
-        else:
-            self.bt_port.parity = serial.PARITY_NONE
-
-        self.bt_port.rtscts = True
-        self.bt_port.xonxoff = True
-        self.bt_port.timeout = 0.5
-
-        log(self.bt_port)
-
-        if not get_current_worker().is_cancelled:
-            try:
-                self.bt_port.open()
-            except serial.SerialException:
-                pass
-
-        self.app.call_from_thread(self.set_timer, 0.5, self.__check_status)
-        
+            if event.state == WorkerState.ERROR:
+                self.set_error_text_state(str(event.worker._error))
+         
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if(event.button.id == "connect_button"):
-            if self.bt_port.is_open:
-                pass
-            self.connect_to_car()
+            self.handle_connection()
 
-            #self.__toggle_indicator()
-            # Await connection
             event.stop()
+
+    ### WORKER
+
+    @work(exclusive=True, exit_on_error=False)
+    def connection_worker(self):
+        worker = get_current_worker()
+        self.app.call_from_thread(self.set_connected_state, True)
+        with self.connection_handle_lock:
+            self.connection_handle = worker
+
+        count = 0
+
+        while not worker.is_cancelled and count < 5:
+            log("Working " + str(count) + '/5')
+            time.sleep(2)
+            count += 1
+
+        raise ValueError("Get Good")
+        # self.app.call_from_thread(self.set_connected_state, False)
+
+    def handle_connection(self):
+        """Handles when the connection button is pressed."""
+        self.try_connecting = not self.try_connecting
+        if self.try_connecting or self.connection_handle.is_finished:
+            self.set_error_text_state(None)
+            self.connection_worker()
+        else:
+            with self.connection_handle_lock:
+                self.connection_handle.cancel()
+                self.connection_handle = None
+            
+
+    
 
 
 class CarControlApp(App):
