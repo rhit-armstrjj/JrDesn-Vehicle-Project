@@ -18,11 +18,21 @@ import msgpack
 import time
 import threading
 
+class VehicleStateChanged(Message):
+    def __init__(self, data:dict) -> None:
+        self.vehicle_data:dict = data
+
+class ControlMessage(Message):
+    pass
+
 class ControlPanel(tw.Widget):
     """Layout for all the controls for the vehicle."""
     """Needs: PID Steering Tuning, Current Speed Percentage, Current Race Time"""
     """Needs: Camera Learned Status, Internal Drive State"""
     
+    def on_vehicle_state_changed(self, event: VehicleStateChanged) -> None:
+        pass
+
     def compose(self):
         yield Label("Control Panel", classes="header")
         # yield Button("Start", id="start", variant="success")
@@ -62,7 +72,6 @@ class ConnectionSettings(Static):
             error_text.update(text)
             error_text_container.visible = True
             
-
     def compose(self) -> ComposeResult: 
         with Container(classes="grid_item"): # ports
             yield Label("Port:", classes="highlight")
@@ -131,14 +140,35 @@ class ConnectionSettings(Static):
 
             event.stop()
 
-    ### WORKER
+    ### WORKER #################### WORKER ###################
 
     @work(exclusive=True, exit_on_error=False)
     def connection_worker(self):
-        worker = get_current_worker()
+        # Set the current worker in case needs canceling.
         self.app.call_from_thread(self.set_connected_state, True)
+        worker = get_current_worker()
         with self.connection_handle_lock:
             self.connection_handle = worker
+
+        ### Check that all info is ready for connection
+        if self.selected_port == None:
+            raise ValueError("Please select a port.")
+        
+        rate:Input = self.query_one("#baud_input")
+        stopb:Input = self.query_one("#stopb_input")
+        
+        log("Evaluating Baudrate Input: " + str(rate.value))
+        if not rate.value.strip().isnumeric():
+            raise ValueError("The baudrate is not numeric.")
+        
+        if not stopb.value.strip().isnumeric():
+            raise ValueError("The number of stopbits is not numeric.")
+        
+        
+        parity_en = self.query_one("#parity_en_sw")
+        parity = self.query_one("#parity_sw")
+
+
 
         count = 0
 
@@ -161,9 +191,6 @@ class ConnectionSettings(Static):
                 self.connection_handle.cancel()
                 self.connection_handle = None
             
-
-    
-
 
 class CarControlApp(App):
 
@@ -194,6 +221,10 @@ class CarControlApp(App):
         
         if not switcher.get_child_by_id(b_id) is None:
             switcher.current = b_id
+
+    def on_vehicle_state_changed(self, event: VehicleStateChanged):
+        ctrls:ControlPanel = self.query_one(ControlPanel)
+        ctrls.on_vehicle_state_changed(event)
 
 # Entrypoint
 if __name__ == '__main__':
