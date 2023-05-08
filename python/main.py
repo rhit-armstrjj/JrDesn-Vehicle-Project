@@ -22,9 +22,6 @@ class VehicleStateChanged(Message):
     def __init__(self, data:dict) -> None:
         self.vehicle_data:dict = data
 
-class ControlMessage(Message):
-    pass
-
 class ControlPanel(tw.Widget):
     """Layout for all the controls for the vehicle."""
     """Needs: PID Steering Tuning, Current Speed Percentage, Current Race Time"""
@@ -35,12 +32,15 @@ class ControlPanel(tw.Widget):
 
     def compose(self):
         yield Label("Control Panel", classes="header")
-        # yield Button("Start", id="start", variant="success")
-        # yield Button("Stop", id="stop", variant="error")
-        # yield Input(placeholder="Ksp")
-        # yield Input(placeholder="Ksi")
-        # yield Input(placeholder="Ksd")
-        # yield TimeDisplay("00:00.00")
+        yield Button("Start", id="start", class="success")
+        yield Button("Stop", id="stop", class="error")
+        yield Input(placeholder="Ksp")
+        yield Input(placeholder="Ksi")
+        yield Input(placeholder="Ksd")
+        yield TimeDisplay("00:00.00")
+
+    async def on_vehicle_state_changed(self, message: VehicleStateChanged) -> None:
+        pass
 
 class ConnectionSettings(Static):
     """Lets user select the port to use."""
@@ -50,6 +50,9 @@ class ConnectionSettings(Static):
 
     connection_handle: Worker = None
     connection_handle_lock: threading.Lock = threading.Lock()
+
+    bt_handle: serial.Serial
+    bt_handle_lock: threading.Lock = threading.Lock()
 
     def set_connected_state(self, connected:bool) -> None:
         button:Button = self.query_one('#connect_button')
@@ -85,7 +88,7 @@ class ConnectionSettings(Static):
             
             with Horizontal():
                 yield Label("Stop Bits: ")
-                yield Input(placeholder="0, 1, 2", id="stopb_input", classes="form_data")
+                yield OptionList("1", "1.5", "2", id="stopb_choice")
 
             with Horizontal():
                 yield Label("Parity Enable: ")
@@ -109,7 +112,7 @@ class ConnectionSettings(Static):
     ### EVENTS
 
     def on_mount(self) -> None:
-        ports = self.query_one(OptionList)
+        ports = self.query_one("#port-select")
         for port in serial.tools.list_ports.comports():
             ports.add_option(port.name)
 
@@ -137,12 +140,35 @@ class ConnectionSettings(Static):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if(event.button.id == "connect_button"):
             self.handle_connection()
-
             event.stop()
+        return
+    
+    async def on_vehicle_state_changed(self, message: VehicleStateChanged) -> None:
+        log("State Changed!")
+        control_panel:ControlPanel = self.app.query_one("#control_panel")
+        control_panel.post_message(message)
+
+    def handle_connection(self):
+        """Handles when the connection button is pressed."""
+        self.try_connecting = not self.try_connecting
+        if self.try_connecting or self.connection_handle.is_finished:
+            self.set_error_text_state(None)
+            self.connection_worker()
+        else:
+            with self.connection_handle_lock:
+                self.connection_handle.cancel()
+                self.connection_handle = None
+
+    def receive_telemetry(self, port:serial.Serial, unpacker: msgpack.Unpacker, worker: Worker):
+        incoming = port.read_all()
+        unpacker.feed(incoming)
+        for o in unpacker:
+            state = VehicleStateChanged(o)
+            self.post_message(state)
 
     ### WORKER #################### WORKER ###################
 
-    @work(exclusive=True, exit_on_error=False)
+    @work(exit_on_error=False)
     def connection_worker(self):
         # Set the current worker in case needs canceling.
         self.app.call_from_thread(self.set_connected_state, True)
@@ -155,38 +181,51 @@ class ConnectionSettings(Static):
             raise ValueError("Please select a port.")
         
         rate:Input = self.query_one("#baud_input")
-        stopb:Input = self.query_one("#stopb_input")
+        stopb:OptionList = self.query_one("#stopb_choice")
         
         log("Evaluating Baudrate Input: " + str(rate.value))
         if not rate.value.strip().isnumeric():
             raise ValueError("The baudrate is not numeric.")
-        
-        if not stopb.value.strip().isnumeric():
-            raise ValueError("The number of stopbits is not numeric.")
-        
+        rate_val = rate.value.strip()
+
+        stopb:OptionList = self.query_one("#stopb_choice")
+        if stopb.highlighted is None:
+            raise ValueError("Please select a stopbit value.")
+        stopb_val = int(stopb.get_option_at_index(stopb.highlighted).prompt)
+
         parity_en = self.query_one("#parity_en_sw")
-        parity = self.query_one("#parity_sw")
+        parity_odd = self.query_one("#parity_sw")
 
-        count = 0
+        parity = serial.PARITY_NONE
 
-        while not worker.is_cancelled and count < 5:
-            log("Working " + str(count) + '/5')
-            time.sleep(2)
-            count += 1
+        if parity_en.value:
+            if parity_odd.value:
+                parity = serial.PARITY_ODD
+            else:
+                parity = serial.PARITY_EVEN
+
+
+        while not worker.is_cancelled:
+            log("New Serial Port Opening")
+            with serial.Serial(self.selected_port, baudrate=rate_val, stopbits=stopb_val, parity=parity) as bt_port:
+                # Write Handle to Widget so that we can send data through it.
+                with self.bt_handle_lock:
+                    self.bt_handle = bt_port
+                
+                unpacker = msgpack.Unpacker()
+                while not worker.is_cancelled:
+                    self.receive_telemetry(bt_port, unpacker, worker)
+                    time.sleep(0.01)
+        
 
         raise NotImplementedError("The connection_worker method has not been completely implemented yet.")
         # self.app.call_from_thread(self.set_connected_state, False)
 
-    def handle_connection(self):
-        """Handles when the connection button is pressed."""
-        self.try_connecting = not self.try_connecting
-        if self.try_connecting or self.connection_handle.is_finished:
-            self.set_error_text_state(None)
-            self.connection_worker()
-        else:
-            with self.connection_handle_lock:
-                self.connection_handle.cancel()
-                self.connection_handle = None
+    @work(exit_on_error=False)
+    def transmission_worker(self, data:dict):
+        if self.bt_handle.is_open:
+            bites = msgpack.pack(data)
+            self.bt_handle.write(bites)
             
 
 class CarControlApp(App):
@@ -208,7 +247,7 @@ class CarControlApp(App):
 
         with ContentSwitcher(initial="ports"):
             yield ConnectionSettings(id = "ports")
-            yield ControlPanel(id = "panel")
+            yield ControlPanel(id = "control_panel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         switcher = self.query_one(ContentSwitcher)
