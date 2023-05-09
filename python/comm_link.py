@@ -1,24 +1,36 @@
-import msgpack
-import serial
+from textual.message import Message
+
+class VehicleStateChanged(Message):
+    def __init__(self, data:dict) -> None:
+        self.vehicle_data:dict = data
 
 """
     Data Packet Structure
     ---------------------
 
-    packet id: int
-    packets sent: int
-    error: True | False
+    packet id: int # Number id of packet
     payload_id: int
     payload: {struct}
 """
 
 """
+    Error Message Struct (Payload)
+    payload_id: -1
+    --------------------
+    Message: string
+"""
+ERROR = -1
+"""
     Vehicle Data Struct (Payload)
     payload_id: 0
     -------------------
-    Arrow: True | False # Do not use data if false
+    millis: int
+    race_time: int
+
+    Arrow: True | False # Do not use the following arrow data if false
     Arrow Head: int
     Arrow Tail: int
+
     
     Speed: int
     Servo Value: int
@@ -28,15 +40,15 @@ import serial
 
     Steering PID: float[3]
 """
+VEHICLE_STATUS = 0
 
 """
     Steering PID Update Command (Payload)
     id = 1
     ------------------
-    New P: float
-    New I: float
-    New D: float
+    new_pid: float[3] # p, i, d
 """
+UPDATE_PID = 1
 
 """
     Start Race Command (Payload)
@@ -44,6 +56,7 @@ import serial
     ------------------
     race_duration (ms): int
 """
+START_RACE = 2
 
 """
     Stop Command (Payload)
@@ -51,21 +64,12 @@ import serial
     ----------------------
     (intentionally empty)
 """
+STOP_RACE = 3
 
-class VehicleLink():
-    """
-        Manages communications between the Car and the UI
-        Polling from the UI will get the messages.
-    """
-    unpacker: msgpack.Unpacker = msgpack.Unpacker()
-    port: serial.Serial
-
-    baud_rate = 115200
-    stop_bits = 0
-    parity = serial.PARITY_NONE
-
-    async def connect(self):
-        pass
-
-    async def poll_serial():
-        pass
+"""
+    Request Telemetry Command (Payload)
+    id = 4
+    ----------------------
+    (intentionally empty)
+"""
+REQUEST_TELEMETRY = 4

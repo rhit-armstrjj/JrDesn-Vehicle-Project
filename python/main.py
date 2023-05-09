@@ -1,45 +1,98 @@
-import serial
-import serial.tools.list_ports
 
-from comm_link import VehicleLink
-
-import textual.widget as tw
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import *
-from textual.reactive import reactive
-from textual import log
-
-from textual import work
-from textual.message import Message
 from textual.worker import Worker, get_current_worker, WorkerState
 
+from textual import work, log
+from textual.reactive import reactive
+from textual.timer import Timer
+
+import comm_link
+from comm_link import VehicleStateChanged
+
+from time_display import TimeDisplay
+
+import serial
+import serial.tools.list_ports
 import msgpack
 import time
 import threading
 
-class VehicleStateChanged(Message):
-    def __init__(self, data:dict) -> None:
-        self.vehicle_data:dict = data
+class DataPacket():
+    packet_id:int = 0
+    payload_id: int
+    payload: dict
 
-class ControlPanel(tw.Widget):
+    def __init__(self, payload_id, payload, packet_id = 0) -> None:
+        self.payload_id = payload_id
+        self.payload = payload
+        self.packet_id = packet_id
+
+    def asdict(self):
+        return {'packet_id': self.packet_id, 'payload_id': self.payload_id, 'payload': self.payload}
+
+class ControlPanel(Static):
     """Layout for all the controls for the vehicle."""
     """Needs: PID Steering Tuning, Current Speed Percentage, Current Race Time"""
     """Needs: Camera Learned Status, Internal Drive State"""
     
     def on_vehicle_state_changed(self, event: VehicleStateChanged) -> None:
+
         pass
 
+    def on_mount(self):
+        self.disabled = True
+
     def compose(self):
-        yield Label("Control Panel", classes="header")
-        yield Button("Start", id="start", class="success")
-        yield Button("Stop", id="stop", class="error")
-        yield Input(placeholder="Ksp")
-        yield Input(placeholder="Ksi")
-        yield Input(placeholder="Ksd")
-        yield TimeDisplay("00:00.00")
+        with Horizontal():
+            with Container(classes="grid_item"):
+                yield TimeDisplay()   
+            with Container(classes="grid_item"):
+                yield Label("Race Controls")
+                yield Button("Start", id="start_car_button", classes="success")
+                yield Button("Stop", id="stop_car_button", classes="error")
+            with Vertical(classes="grid_item"):
+                yield Label("PID Tuning")
+                yield Input(placeholder="Ksp", id="Ksp")
+                yield Input(placeholder="Ksi", id="Ksi")
+                yield Input(placeholder="Ksd", id="Ksd")
+                yield Button("Update", id="update_pid_button")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        connection = self.app.query_one(ConnectionSettings)
+        start:Button = self.query_one("#start_car_button")
+        stop:Button = self.query_one("#stop_car_button")
+
+        if event.button.id == "start_car_button":
+            connection.transmission_worker(id=comm_link.START_RACE, payload={})
+            self.add_class("started")
+            stop.focus()
+            event.stop()
+        elif event.button.id == "stop_car_button":
+            connection.transmission_worker(id=comm_link.STOP_RACE, paylaod={})
+            self.remove_class("started")
+            start.focus()
+            event.stop()
+        elif event.button.id == "update_pid_button":
+            inputs = self.query(Input).results()
+            pids = []
+            
+
+            connection.transmission_worker(comm_link.UPDATE_PID, {'new_pid':[]})
+            event.stop()
+            raise NotImplementedError("PID Update Method Not Completed")
+        return
 
     async def on_vehicle_state_changed(self, message: VehicleStateChanged) -> None:
+        data = message.vehicle_data
+        payload = data["payload"]
+
+        if data["payload_id"] == 0:
+            timedisplay = self.query_one(TimeDisplay)
+            timedisplay.time = payload["millis"]
+            pass     
+
         pass
 
 class ConnectionSettings(Static):
@@ -54,16 +107,41 @@ class ConnectionSettings(Static):
     bt_handle: serial.Serial
     bt_handle_lock: threading.Lock = threading.Lock()
 
-    def set_connected_state(self, connected:bool) -> None:
+    packets_sent = reactive(0)
+    packets_received = reactive(0)
+
+    telemetry_timer: Timer
+
+    def recurring_telemetry(self):
+        self.transmission_worker(comm_link.REQUEST_TELEMETRY, {})
+
+    def set_connected_state(self, connected_state:int) -> None:
+        """Sets the connect button based on state: 
+            0: Connect!
+            1: Cancel (warn)
+            2: Disconnect (warn)
+        """
         button:Button = self.query_one('#connect_button')
-        if connected:
+        log("Setting connect button state to "+str(connected_state))
+        if connected_state == 2:
             button.label = "Disconnect"
+            self.app.query_one(ControlPanel).disabled = False
+            self.packets_received = 0
+            self.packets_sent = 0
+            log("Starting telemetry timer.")
+            self.telemetry_timer.reset()
+            self.telemetry_timer.resume()
+        elif connected_state == 1:
+            button.label = "Cancel"
             button.remove_class("succ")
             button.add_class("warning")
-        else:
+        elif connected_state == 0:
             button.label = "Connect!"
+            self.app.query_one(ControlPanel).disabled = True
             button.add_class("succ")            
             button.remove_class("warning")
+            log("Stopping telemetry timer.")
+            self.telemetry_timer.pause()
 
     def set_error_text_state(self, text:str|None) -> None:
         error_text_container: Horizontal = self.query_one("#error_text_container")
@@ -97,9 +175,9 @@ class ConnectionSettings(Static):
                 yield Switch(id="parity_sw", classes="parity_dep form_data", disabled=True)
 
         with Vertical(classes="grid_item"): # Connection Status
-            with Horizontal():
-                pass
-            yield Label(id="conn_settings")
+            yield Label("Connection Stats:", classes="highlight")
+            yield Label("Packets Sent: 0", id="packets_sent")
+            yield Label("Packets received: 0", id="packets_received")
 
         with Vertical(classes="grid_item", id="connect_button_box"):
             yield Button("Connect!", id="connect_button", classes="succ")
@@ -116,6 +194,8 @@ class ConnectionSettings(Static):
         for port in serial.tools.list_ports.comports():
             ports.add_option(port.name)
 
+        self.telemetry_timer = self.set_interval(0.05, self.recurring_telemetry, pause=True)
+
     def on_switch_changed(self, event: Switch.Changed):
         if event.switch.id == "parity_en_sw":
             options = self.query(Switch).filter('.parity_dep')
@@ -131,12 +211,11 @@ class ConnectionSettings(Static):
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.name == 'connection_worker':
             if event.state != WorkerState.SUCCESS:
-                self.set_connected_state(False)
+                self.set_connected_state(0)
             
             if event.state == WorkerState.ERROR:
                 self.set_error_text_state(str(event.worker._error))
          
-
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if(event.button.id == "connect_button"):
             self.handle_connection()
@@ -166,12 +245,23 @@ class ConnectionSettings(Static):
             state = VehicleStateChanged(o)
             self.post_message(state)
 
+    ### REACTIVE
+
+    def watch_packets_sent(self, packets):
+        self.query_one("#packets_sent").update(f"Packets Sent: {packets}")
+        pass
+
+    def watch_packets_received(self, packets):
+        self.query_one("#packets_received").update(f"Packets received: {packets}")
+        pass
+
+
     ### WORKER #################### WORKER ###################
 
     @work(exit_on_error=False)
     def connection_worker(self):
         # Set the current worker in case needs canceling.
-        self.app.call_from_thread(self.set_connected_state, True)
+        self.app.call_from_thread(self.set_connected_state, 1)
         worker = get_current_worker()
         with self.connection_handle_lock:
             self.connection_handle = worker
@@ -205,28 +295,30 @@ class ConnectionSettings(Static):
                 parity = serial.PARITY_EVEN
 
 
-        while not worker.is_cancelled:
-            log("New Serial Port Opening")
-            with serial.Serial(self.selected_port, baudrate=rate_val, stopbits=stopb_val, parity=parity) as bt_port:
-                # Write Handle to Widget so that we can send data through it.
-                with self.bt_handle_lock:
-                    self.bt_handle = bt_port
-                
-                unpacker = msgpack.Unpacker()
-                while not worker.is_cancelled:
-                    self.receive_telemetry(bt_port, unpacker, worker)
-                    time.sleep(0.01)
+        log("New Serial Port Opening")
+        with serial.Serial(self.selected_port, baudrate=rate_val, stopbits=stopb_val, parity=parity) as bt_port:
+            self.app.call_from_thread(self.set_connected_state, 2)
+            # Write Handle to Widget so that we can send data through it.
+            with self.bt_handle_lock:
+                self.bt_handle = bt_port
+            
+            unpacker = msgpack.Unpacker()
+            while not worker.is_cancelled:
+                self.receive_telemetry(bt_port, unpacker, worker)
+                time.sleep(0.01)
         
 
         raise NotImplementedError("The connection_worker method has not been completely implemented yet.")
         # self.app.call_from_thread(self.set_connected_state, False)
 
     @work(exit_on_error=False)
-    def transmission_worker(self, data:dict):
+    def transmission_worker(self, id:int, payload:dict):
+        self.packets_sent += 1
         if self.bt_handle.is_open:
-            bites = msgpack.pack(data)
+            packet = DataPacket(id, payload, packet_id=self.packets_sent)
+            bites = msgpack.packb(packet.asdict())
             self.bt_handle.write(bites)
-            
+            time.sleep(0.001)
 
 class CarControlApp(App):
 
@@ -242,8 +334,7 @@ class CarControlApp(App):
 
         with Horizontal(id="buttons"):  
             yield Button("Connection Settings", id="ports")  
-            yield Button("Control Panel", id="panel") 
-            #yield Button("Raw Terminal", id="terminal")
+            yield Button("Control Panel", id="control_panel")
 
         with ContentSwitcher(initial="ports"):
             yield ConnectionSettings(id = "ports")
@@ -252,6 +343,7 @@ class CarControlApp(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         switcher = self.query_one(ContentSwitcher)
         b_id = event.button.id
+        log("Button ID: "+str(b_id))
         if b_id is None:
             return
         
