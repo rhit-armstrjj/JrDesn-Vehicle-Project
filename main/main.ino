@@ -43,16 +43,16 @@ unsigned long delayTotal = 0; // Loop delay.
 int loops = 0; // Counting loops
 
 /******** MOTORS **********/
-#define STEERING_MAX 170
-#define STEERING_MIN 10
+#define STEERING_MAX 175
+#define STEERING_MIN 5
 #define STEERING_PIN 32
 Servo steering;
-float Ksp = 0.405, Ksi = 0.065, Ksd = 0.00, Hz = 1000/loopDelay;
+float Ksp = 0.452, Ksi = 0.0003, Ksd = 0.00, Hz = 1000/loopDelay;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
 FastPID steeringPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
 
-#define SPEED_MIN 49
+#define SPEED_MIN 45
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
@@ -283,11 +283,7 @@ void loop()
   setSteering(steerPD);
 
   // feedback is mapped to arrow bc speed should determined by angle of steering column
-  if(abs(steeringMapped) < 40) {
-    setSpeed(4 * (8/info.busVoltage));
-  } else {
-    setSpeed(1 * (8/info.busVoltage));
-  }
+  setSpeed(3);
 
   if(millis() > startRaceTime + 90000) setSpeed(0); //stop after 90s
 
