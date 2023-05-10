@@ -13,7 +13,6 @@
 #include "BluetoothSerial.h"
 #include "HUSKYLENS.h"
 #include <vector>
-#include <MsgPacketizer.h>
 #include <MsgPack.h>
 #include <Adafruit_EEPROM_I2C.h>
 #include <Adafruit_FRAM_I2C.h>
@@ -47,6 +46,9 @@ Servo motor;
 #error Serial Bluetooth not available or not enabled.
 #endif
 #define USE_PIN //optional
+
+MsgPack::Unpacker unpacker; // For Unpacking & Packing Telemetry
+MsgPack::Packer packer;
 
 String* device_name = new String("ECE362CarTeam07");
 BluetoothSerial SerialBT;
@@ -323,8 +325,8 @@ void setup()
 
 
   state = Waiting;
-  MsgPacketizer::publish(SerialBT, 0x34, Ksp, Ksi, Ksd, state, driveTime, currentPower);
-  MsgPacketizer::subscribe(SerialBT, 0x12, Ksp, Ksi, Ksd, state, driveTime, currentPower);
+  //MsgPacketizer::publish(SerialBT, 0x34, Ksp, Ksi, Ksd, state, driveTime, currentPower);
+  //MsgPacketizer::subscribe(SerialBT, 0x12, Ksp, Ksi, Ksd, state, driveTime, currentPower);
 
   // Loop 2
   xTaskCreatePinnedToCore(
@@ -363,13 +365,13 @@ void loop()
 
 void telemetryLoop() {
   getPowerInfo(&currentPower);
-  MsgPacketizer::update();
+  int bytesAvailable = SerialBT.available();
+  for(int i = 0; i < bytesAvailable; i++) {
+    char buf;
+    //SerialBT.read(&buf, 1);
+    //unpacker.feed((uint8_t*) &buf, 1);
+}
   
-  //Update FRAM
-  writeFloatToFRAM(0, Ksp);
-  writeFloatToFRAM(1, Ksi);
-  writeFloatToFRAM(2, Ksd);  
-
 }
 
 TaskFunction_t loop2() {
