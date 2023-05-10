@@ -38,7 +38,7 @@ class ControlPanel(Static):
     """Needs: Camera Learned Status, Internal Drive State"""
     
     def on_vehicle_state_changed(self, event: VehicleStateChanged) -> None:
-
+        # TODO Add reactive elements for Power, Speed and Steering.
         pass
 
     def on_mount(self):
@@ -65,7 +65,7 @@ class ControlPanel(Static):
         stop:Button = self.query_one("#stop_car_button")
 
         if event.button.id == "start_car_button":
-            connection.transmission_worker(id=comm_link.START_RACE, payload={})
+            connection.transmission_worker(id=comm_link.START_RACE, payload={'race_duration':90_000})
             self.add_class("started")
             stop.focus()
             event.stop()
@@ -76,13 +76,17 @@ class ControlPanel(Static):
             event.stop()
         elif event.button.id == "update_pid_button":
             inputs = self.query(Input).results()
-            pids = []
-            
-
-            connection.transmission_worker(comm_link.UPDATE_PID, {'new_pid':[]})
             event.stop()
             raise NotImplementedError("PID Update Method Not Completed")
         return
+
+    @work(exclusive=True)
+    async def verify_inputs(self):
+        connection = self.app.query_one(ConnectionSettings)
+        pids = []
+            
+
+        connection.transmission_worker(comm_link.UPDATE_PID, {'new_pid':[]})
 
     async def on_vehicle_state_changed(self, message: VehicleStateChanged) -> None:
         data = message.vehicle_data
