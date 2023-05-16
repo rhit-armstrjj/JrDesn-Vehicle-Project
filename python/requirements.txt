@@ -1,3 +1,5 @@
 textual[dev] >= 0.23.0
 pyserial >= 3.4
 matplotlib
+cobs
+crc8

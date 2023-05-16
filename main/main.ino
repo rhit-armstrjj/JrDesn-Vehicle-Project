@@ -1,3 +1,4 @@
+
 /*
 * Authors: Jake Armstrong, Garrett Hart
 * Date: 3/23/2023
@@ -6,36 +7,39 @@
 #include <ESP32PWM.h>
 #include <ESP32Servo.h>
 #include <FastPID.h>
-#include <FRAM_RINGBUFFER.h>
-#include <FRAM.h>
 #include <Wire.h>
 #include <Adafruit_INA219.h>
 #include "BluetoothSerial.h"
 #include "HUSKYLENS.h"
 #include <vector>
 #include <MsgPack.h>
-#include <Adafruit_EEPROM_I2C.h>
-#include <Adafruit_FRAM_I2C.h>
+#include <MsgPacketizer.h>
+#include <LinkedList.h>
 
 /**
  * Control Loop
 */
 uint32_t loopDelay = 60;
-float Ksp = 0.375, Ksi = 0.06, Ksd = 0.00, Hz = 1000/loopDelay;
+unsigned int computeTime = 0;
+
+float Ksp = 0.452, Ksi = 0.0003, Ksd = 0.00, Hz = 1000/loopDelay;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
 #define STEERING_MIN 10
 #define STEERING_PIN 32
+
 Servo steering;
 int steeringOutputBits = 8;
 bool steeringOutputSigned = true;
 FastPID steeringPID;
+int mapped_steering = 0;
 
 #define SPEED_MIN 49
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
+int driveSpeed = 0;
 
 
 /******** BLEUTOOTH **********/
@@ -50,25 +54,81 @@ Servo motor;
 MsgPack::Unpacker unpacker; // For Unpacking & Packing Telemetry
 MsgPack::Packer packer;
 
-String* device_name = new String("ECE362CarTeam07");
+
+#define REQUEST_TELEMETRY 4
+const int VEHICLE_STATS = 12;
+
+struct Telemetry {
+  unsigned int ms;
+  unsigned int raceTime;
+
+  bool arrowExists;
+  int arrowHead;
+  int arrowTail;
+
+  unsigned int speed;
+  unsigned int servoValue;
+
+  float voltage;
+  float current;
+  float power;
+  float energy;
+
+  float P;
+  float I;
+  float D;
+
+  MSGPACK_DEFINE(ms, raceTime, arrowExists, arrowHead, arrowTail, speed, servoValue, voltage, current, power, energy, P,I,D);
+};
+
+String *device_name = new String("ECE362CarTeam07");
 BluetoothSerial SerialBT;
 const char *pin = "5188";
 std::vector<String> errorLog;
+
 boolean arrowLost = false;
+int arrowTarget = 0;
+int arrowEnd = 0;
+
+const uint8_t recv_index = 0x12;
 
 
 /******** CURRENT SENSOR **********/
 Adafruit_INA219 ina219;
 
+/**
+ * Power Info
+ * Shunt Voltage: mV (voltage across current sensor) (Omitted)
+ * busVoltage: V (total voltage)
+ * current: mA
+ * loadVoltage: V (Voltage across on low side of current sensor resistor) (Omitted)
+ * power: mW
+*/
+struct PowerInfo {
+  float busVoltage;
+  float current;
+  float power;
+  MSGPACK_DEFINE(busVoltage, current, power);
+};
+
+/** DO NOT CHANGE THE FOLLOWING VARIABLES WITHOUT LOCKING MUTEX*/
+PowerInfo currentPower;
+float currentAverage;
+float energyExpended;
+/**End mutex-protected variables.*/
+
+// Protects shared variables between cores.
+SemaphoreHandle_t powerMutex = NULL;
+
+//Queue of currents.
+LinkedList<float> currentList;
+
 /******** Huskylens **************/
-HUSKYLENS camera;
 #define HUSKY_SDA 21
 #define HUSKY_SCL 22
 #define HUSKY_ADR 0x32
+HUSKYLENS camera;
 
-/******** FRAM *********/
-#define FRAM_ADR 0x50
-Adafruit_EEPROM_I2C fram;
 
 /**
  * Internal States
@@ -89,9 +149,6 @@ bool newState = false;
 unsigned long driveTime = 0;
 unsigned long startDriveTime = 0;
 
-//TODO: Setup FRAM for saving states.
-/*******/
-
 /********* BEGIN HELPER FUNCTIONS **********/
 /**
  * Sets up motor contorl.
@@ -100,14 +157,14 @@ void startup_motor() {
   motor.attach(SPEED_PIN, 800, 2000);
   delay(1000);
   motor.write(0);
-  delay(4000);
+  delay(5000);
 }
 
 /**
  * Sets up Steering servo.
 */
 void startup_steering() {
-  // Load Ksp, Ksi, & Ksd from FRAM
+  // Load Ksp, Ksi, & Ksd
 
   steeringPID = FastPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
   steering.attach(STEERING_PIN);
@@ -119,7 +176,8 @@ void startup_steering() {
  * Sets the steering angle from -100 to 100
 */
 void setSteering(int angle) {
-  steering.write(map(angle, -100, 100, STEERING_MIN, STEERING_MAX ));
+  mapped_steering = map(angle, -100, 100, STEERING_MIN, STEERING_MAX );
+  steering.write(mapped_steering);
 }
 
 /**
@@ -158,72 +216,43 @@ void setSpeed(int speed) {
       return;
     }
     int val = map(speed, 1, 100, SPEED_MIN, SPEED_MAX);
+    driveSpeed = val;
     motor.write(val);
 }
-
-/**
- * Power Info
- * Shunt Voltage: mV
- * busVoltage: V
- * current: mA
- * loadVoltage: V
- * power: mW
-*/
-struct PowerInfo {
-  float shuntVoltage;
-  float busVoltage;
-  float current;
-  float loadVoltage;
-  float power;
-  MSGPACK_DEFINE(shuntVoltage, busVoltage, current, loadVoltage, power);
-};
-PowerInfo currentPower;
 
 /**
  * Handles getting power info.
 */
 void getPowerInfo(struct PowerInfo *data) { 
 
-  float shuntvoltage = ina219.getShuntVoltage_mV();
   float busvoltage = ina219.getBusVoltage_V();
-  *data = {
-    shuntvoltage,
-    busvoltage,
-    ina219.getCurrent_mA(), 
-    busvoltage + (shuntvoltage / 1000),
-    ina219.getPower_mW()
-  };
-}
+  float current = ina219.getCurrent_mA();
+  float power = ina219.getPower_mW();
 
-/********** FRAM HELPERS **********/
-float readFloatFromFRAM(int idx) {
-  float f; 
-  uint8_t buffer[4];
-  fram.read(idx*sizeof(float), buffer, sizeof(float));
-
-  memcpy((void *) &f, buffer, 4);
-  return f;
-}
-
-void writeFloatToFRAM(int idx, float f) {
-  uint8_t buffer[4];
-  memcpy(buffer, (void *) &f, 4);
-  fram.write(idx*sizeof(float), buffer, sizeof(float));
-}
-
-void initFRAM() {
-
-  fram.begin(FRAM_ADR);
-  // Load default if no data in FRAM.
-  if(readFloatFromFRAM(0) == 0) {
-    writeFloatToFRAM(0, Ksp);
-    writeFloatToFRAM(1, Ksi);
-    writeFloatToFRAM(2, Ksd);
-  } else {
-    Ksp = readFloatFromFRAM(0);
-    Ksi = readFloatFromFRAM(1);
-    Ksd = readFloatFromFRAM(2);
+  if(currentList.size() == (1000 / loopDelay)) { // Keep list average at around one second
+    currentList.pop();
   }
+  
+  currentList.add(0, current);
+
+  float sum = 0;
+  for(int i = 0; i < currentList.size(); i++) {
+    sum += currentList.get(i);
+  }
+
+  if(xSemaphoreTake(powerMutex, portTICK_PERIOD_MS * 10)) { // Take mutex, timeout 10ms
+    *data = {
+      busvoltage,
+      current,
+      power
+    };
+
+    currentAverage = (sum / currentList.size());
+    energyExpended = energyExpended + (power*1000/loopDelay);
+
+    xSemaphoreGive(powerMutex); // Give mutex back
+  }
+
 }
 
 /**
@@ -244,7 +273,10 @@ int getHuskyArrowX() {
     arrowLost = true;
     return 160;
   }
-  //printResult(arrow);
+
+  arrowTarget = arrow.xTarget;
+  arrowEnd = arrow.xOrigin;
+
   return arrow.xTarget;
 }
 
@@ -297,7 +329,9 @@ void driveStateLoop() {
   } else {
     setSpeed(5);
   }
-  if(arrowLost) setSpeed(0);
+
+  if(arrowLost) setSpeed(0); // Failsafe if the car falls off of the track.
+  
   driveTime = millis() - startDriveTime;
   if(driveTime >= 90000) state = Waiting; 
 }
@@ -308,7 +342,9 @@ void driveStateLoop() {
 void waitingStateLoop() {
   setSpeed(0);
   setSteering(0);
+  getPowerInfo(&currentPower);
   driveTime = 0;
+  arrowLost = false;
 }
 /********* END HELPER FUNCTIONS *********/
 
@@ -317,34 +353,72 @@ void setup()
 {
   Serial.begin(115200);
   Wire.begin();
-  
+  Serial.println("Wire Began");
   init_bluetooth();
+  Serial.println("Bluetooth Init");
   startup_motor();
+  Serial.println("Motor Init");
   startup_steering(); 
+  Serial.println("Steering Init");
   startup_huskylens();
-
+  Serial.println("Camera Init");
+  powerMutex = xSemaphoreCreateMutex();
 
   state = Waiting;
-  //MsgPacketizer::publish(SerialBT, 0x34, Ksp, Ksi, Ksd, state, driveTime, currentPower);
-  //MsgPacketizer::subscribe(SerialBT, 0x12, Ksp, Ksi, Ksd, state, driveTime, currentPower);
 
-  // Loop 2
-  xTaskCreatePinnedToCore(
-    (TaskFunction_t) loop2,
-    "TELEMETRY",
-    500,
-    NULL,
-    tskIDLE_PRIORITY,
-    NULL,
-    0
+  Serial.println("Ready!");
+
+  // Handles when a packet is received over bluetooth.
+  MsgPacketizer::subscribe(SerialBT, REQUEST_TELEMETRY,
+      [](int payload_id, MsgPack::map_t<String,String> payload)
+      {
+        Serial.println("Packet Received.");
+        // send received data back in one-line
+        if(xSemaphoreTake(powerMutex, portTICK_PERIOD_MS * 10)) {
+
+          Telemetry stuff = {
+            millis(),
+            0,// driveTime,
+
+            0,// arrowLost,
+            0,// arrowTarget,
+            0,// arrowEnd,
+
+            0,// driveSpeed,
+            0,// mapped_steering,
+
+            currentPower.busVoltage,
+            currentPower.current,
+            energyExpended,
+
+            0,// Ksp,
+            0,// Ksi,
+            0// Ksd
+          };
+
+          MsgPacketizer::send(Serial, VEHICLE_STATS, payloadId, stuff);
+        }
+      }
   );
+
+  // // Loop 2
+  // xTaskCreatePinnedToCore(
+  //   (TaskFunction_t) loop,
+  //   "TELEMETRY",
+  //   1000,
+  //   NULL,
+  //   tskIDLE_PRIORITY,
+  //   NULL,
+  //   0
+  // );
 }
 
 /******** ARDUINO LOOP FUNCTION **********/
 void loop()
 {
-  // Telemetry Transmission
-  //int powerSize = transmitStatusInfo();
+  unsigned int loopTime = millis();
+  getPowerInfo(&currentPower);
+
   switch(state) {
     case StartRace:
       startRaceLoop();
@@ -358,29 +432,19 @@ void loop()
       waitingStateLoop();
       break;
   }
+
+  MsgPacketizer::parse();
   
-  // Clear Terminal
-  delay(loopDelay);
+  computeTime = loopTime-millis();
+  
+  delay(loopDelay - computeTime);
 }
+
+uint8_t* telemetryBuffer;
+size_t telemetryBufferSize = 0;
 
 void telemetryLoop() {
-  getPowerInfo(&currentPower);
-  int bytesAvailable = SerialBT.available();
-  for(int i = 0; i < bytesAvailable; i++) {
-    char buf;
-    //SerialBT.read(&buf, 1);
-    //unpacker.feed((uint8_t*) &buf, 1);
-}
-  
-}
-
-TaskFunction_t loop2() {
-  while(1) {
-    
-    telemetryLoop();
-
-  }
-
+  MsgPacketizer::parse();
 }
 
 

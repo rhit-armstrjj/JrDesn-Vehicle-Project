@@ -12,6 +12,7 @@ import comm_link
 from comm_link import VehicleStateChanged
 
 from time_display import TimeDisplay
+from cobs import cobs
 
 import serial
 import serial.tools.list_ports
@@ -21,13 +22,14 @@ import threading
 
 class DataPacket():
     packet_id:int = 0
-    payload_id: int
     payload: dict
 
-    def __init__(self, payload_id, payload, packet_id = 0) -> None:
-        self.payload_id = payload_id
+    def __init__(self, payload, packet_id = 0) -> None:
         self.payload = payload
         self.packet_id = packet_id
+
+    def __str__(self):
+        return str(self.asdict())
 
     def asdict(self):
         return {'packet_id': self.packet_id, 'payload_id': self.payload_id, 'payload': self.payload}
@@ -239,11 +241,16 @@ class ConnectionSettings(Static):
             self.connection_worker()
         else:
             with self.connection_handle_lock:
+                log("Cancelling connection handle.")
                 self.connection_handle.cancel()
                 self.connection_handle = None
 
     def receive_telemetry(self, port:serial.Serial, unpacker: msgpack.Unpacker, worker: Worker):
-        incoming = port.read_all()
+        incoming = bytes()
+        while min(incoming, default = 1) != 0 and not worker.is_cancelled:
+            incoming += port.read(1)
+    
+        incoming = cobs.decode(incoming[:-1])
         unpacker.feed(incoming)
         for o in unpacker:
             state = VehicleStateChanged(o)
@@ -298,9 +305,8 @@ class ConnectionSettings(Static):
             else:
                 parity = serial.PARITY_EVEN
 
-
         log("New Serial Port Opening")
-        with serial.Serial(self.selected_port, baudrate=rate_val, stopbits=stopb_val, parity=parity) as bt_port:
+        with serial.Serial(self.selected_port, baudrate=rate_val, stopbits=stopb_val, parity=parity, timeout=0.1) as bt_port:
             self.app.call_from_thread(self.set_connected_state, 2)
             # Write Handle to Widget so that we can send data through it.
             with self.bt_handle_lock:
@@ -308,20 +314,27 @@ class ConnectionSettings(Static):
             
             unpacker = msgpack.Unpacker()
             while not worker.is_cancelled:
+                log("Receive Loop")
                 self.receive_telemetry(bt_port, unpacker, worker)
                 time.sleep(0.01)
         
-
-        raise NotImplementedError("The connection_worker method has not been completely implemented yet.")
-        # self.app.call_from_thread(self.set_connected_state, False)
+        log("Successfully disconnected.")
 
     @work(exit_on_error=False)
     def transmission_worker(self, id:int, payload:dict):
         self.packets_sent += 1
         if self.bt_handle.is_open:
-            packet = DataPacket(id, payload, packet_id=self.packets_sent)
+            import crc8
+            hash = crc8.crc8()
+            packet = DataPacket(payload, packet_id=self.packets_sent)
             bites = msgpack.packb(packet.asdict())
-            self.bt_handle.write(bites)
+
+            # Create bytes for msgpack |id | msgpack|crc|
+            data_bytes = bytes(id) + bites
+            hash.update(data_bytes)
+            data_bytes_crc = data_bytes + hash.digest()
+
+            self.bt_handle.write(cobs.encode(data_bytes_crc)+bytes('\0', 'ascii'))
             time.sleep(0.001)
 
 class CarControlApp(App):
