@@ -1,8 +1,3 @@
-from textual.message import Message
-
-class VehicleStateChanged(Message):
-    def __init__(self, data:dict) -> None:
-        self.vehicle_data:dict = data
 
 """
     Data Packet Structure
@@ -40,7 +35,7 @@ ERROR = -1
 
     Steering PID: float[3]
 """
-VEHICLE_STATUS = 0
+VEHICLE_STATUS = 32
 
 """
     Steering PID Update Command (Payload)
@@ -72,4 +67,4 @@ STOP_RACE = 3
     ----------------------
     (intentionally empty)
 """
-REQUEST_TELEMETRY = 4
+REQUEST_TELEMETRY = 52

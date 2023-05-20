@@ -55,36 +55,41 @@ MsgPack::Unpacker unpacker; // For Unpacking & Packing Telemetry
 MsgPack::Packer packer;
 
 
-#define REQUEST_TELEMETRY 4
-const int VEHICLE_STATS = 12;
+const uint8_t REQUEST_TELEMETRY = 0x34;
+const uint8_t VEHICLE_STATS = 0x20;
+const uint8_t START_RACE = 2;
+const uint8_t STOP_RACE = 3;
 
 struct Telemetry {
-  unsigned int ms;
-  unsigned int raceTime;
+  MsgPack::str_t ms, raceTime, arrowExists, arrowHead, arrowTail, 
+  speed, servoValue, voltage, current, power, energy, P,I,D;
+  unsigned int k_ms;
+  unsigned int k_raceTime;
 
-  bool arrowExists;
-  int arrowHead;
-  int arrowTail;
+  bool k_arrowExists;
+  int k_arrowHead;
+  int k_arrowTail;
 
-  unsigned int speed;
-  unsigned int servoValue;
+  unsigned int k_speed;
+  unsigned int k_servoValue;
 
-  float voltage;
-  float current;
-  float power;
-  float energy;
+  float k_voltage;
+  float k_current;
+  float k_power;
+  float k_energy;
 
-  float P;
-  float I;
-  float D;
+  float k_P;
+  float k_I;
+  float k_D;
 
-  MSGPACK_DEFINE(ms, raceTime, arrowExists, arrowHead, arrowTail, speed, servoValue, voltage, current, power, energy, P,I,D);
+  MSGPACK_DEFINE_MAP(ms, k_ms, raceTime, k_raceTime, arrowExists, k_arrowExists,
+   arrowHead, k_arrowHead, arrowTail, k_arrowTail, speed, k_speed, servoValue, k_servoValue,
+   voltage, k_voltage, current, k_current, power, k_power, energy, k_energy, P, k_P, I, k_I, D, k_D);
 };
 
 String *device_name = new String("ECE362CarTeam07");
 BluetoothSerial SerialBT;
 const char *pin = "5188";
-std::vector<String> errorLog;
 
 boolean arrowLost = false;
 int arrowTarget = 0;
@@ -108,13 +113,13 @@ struct PowerInfo {
   float busVoltage;
   float current;
   float power;
-  MSGPACK_DEFINE(busVoltage, current, power);
+  MSGPACK_DEFINE_MAP(busVoltage, current, power);
 };
 
 /** DO NOT CHANGE THE FOLLOWING VARIABLES WITHOUT LOCKING MUTEX*/
 PowerInfo currentPower;
-float currentAverage;
-float energyExpended;
+float currentAverage = 0;
+float energyExpended = 0;
 /**End mutex-protected variables.*/
 
 // Protects shared variables between cores.
@@ -352,6 +357,8 @@ void waitingStateLoop() {
 void setup()
 {
   Serial.begin(115200);
+  // startup_huskylens();
+  // Serial.println("Camera Init");
   Wire.begin();
   Serial.println("Wire Began");
   init_bluetooth();
@@ -360,63 +367,81 @@ void setup()
   Serial.println("Motor Init");
   startup_steering(); 
   Serial.println("Steering Init");
-  startup_huskylens();
-  Serial.println("Camera Init");
   powerMutex = xSemaphoreCreateMutex();
 
   state = Waiting;
 
   Serial.println("Ready!");
 
-  // Handles when a packet is received over bluetooth.
+  // Handles when a telemetry request packet is received over bluetooth.
   MsgPacketizer::subscribe(SerialBT, REQUEST_TELEMETRY,
-      [](int payload_id, MsgPack::map_t<String,String> payload)
-      {
-        Serial.println("Packet Received.");
-        // send received data back in one-line
-        if(xSemaphoreTake(powerMutex, portTICK_PERIOD_MS * 10)) {
+    [&](const MsgPack::map_t<String, int> unused) {
+      // Serial.println("Packet Received.");
+      // send received data back in one-line
 
-          Telemetry stuff = {
-            millis(),
-            0,// driveTime,
+      Telemetry stuff = {
+          "ms",
+          "raceTime",
+          "arrowExists",
+          "arrowTarget",
+          "arrowEnd",
+          "driveSpeed",
+          "servoSetting",
+          "busVoltage",
+          "current",
+          "power",
+          "energySpent",
+          "P","I","D",
+          millis(),
+          0,// driveTime,
 
-            0,// arrowLost,
-            0,// arrowTarget,
-            0,// arrowEnd,
+          0,// arrowLost,
+          0,// arrowTarget,
+          0,// arrowEnd,
 
-            0,// driveSpeed,
-            0,// mapped_steering,
+          0,// driveSpeed,
+          0,// mapped_steering,
 
-            currentPower.busVoltage,
-            currentPower.current,
-            energyExpended,
+          currentPower.busVoltage,
+          427.420,// Current currant
+          currentPower.power,
+          energyExpended,
 
-            0,// Ksp,
-            0,// Ksi,
-            0// Ksd
-          };
+          Ksp,// Ksp,
+          Ksi,// Ksi,
+          Ksd// Ksd
+        };
 
-          MsgPacketizer::send(Serial, VEHICLE_STATS, payloadId, stuff);
-        }
+        MsgPacketizer::send(SerialBT, REQUEST_TELEMETRY, stuff);
+        
       }
   );
 
-  // // Loop 2
-  // xTaskCreatePinnedToCore(
-  //   (TaskFunction_t) loop,
-  //   "TELEMETRY",
-  //   1000,
-  //   NULL,
-  //   tskIDLE_PRIORITY,
-  //   NULL,
-  //   0
-  // );
+  MsgPacketizer::subscribe(SerialBT, START_RACE, 
+    [&](const MsgPack::map_t<String, int> unused) {
+      Serial.println("Starting Race");
+      // TODO: Set state to start race state.
+    }
+  );
+
+  MsgPacketizer::subscribe(SerialBT, STOP_RACE, 
+    [&](const MsgPack::map_t<String, int> unused) {
+      Serial.println("Stopping Race");
+      state = State::Waiting;
+    }
+  );
+
 }
 
 /******** ARDUINO LOOP FUNCTION **********/
 void loop()
 {
   unsigned int loopTime = millis();
+
+  // if(SerialBT.available() > 0) Serial.printf("%d Bytes Available\r\n", SerialBT.available());
+
+  MsgPacketizer::parse();
+  
   getPowerInfo(&currentPower);
 
   switch(state) {
@@ -433,18 +458,7 @@ void loop()
       break;
   }
 
-  MsgPacketizer::parse();
-  
   computeTime = loopTime-millis();
   
   delay(loopDelay - computeTime);
 }
-
-uint8_t* telemetryBuffer;
-size_t telemetryBufferSize = 0;
-
-void telemetryLoop() {
-  MsgPacketizer::parse();
-}
-
-

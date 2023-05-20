@@ -3,13 +3,13 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import *
 from textual.worker import Worker, get_current_worker, WorkerState
+from textual.message import Message
 
 from textual import work, log
 from textual.reactive import reactive
 from textual.timer import Timer
 
 import comm_link
-from comm_link import VehicleStateChanged
 
 from time_display import TimeDisplay
 from cobs import cobs
@@ -19,6 +19,7 @@ import serial.tools.list_ports
 import msgpack
 import time
 import threading
+import crc8
 
 class DataPacket():
     packet_id:int = 0
@@ -32,77 +33,20 @@ class DataPacket():
         return str(self.asdict())
 
     def asdict(self):
-        return {'packet_id': self.packet_id, 'payload_id': self.payload_id, 'payload': self.payload}
-
-class ControlPanel(Static):
-    """Layout for all the controls for the vehicle."""
-    """Needs: PID Steering Tuning, Current Speed Percentage, Current Race Time"""
-    """Needs: Camera Learned Status, Internal Drive State"""
-    
-    def on_vehicle_state_changed(self, event: VehicleStateChanged) -> None:
-        # TODO Add reactive elements for Power, Speed and Steering.
-        pass
-
-    def on_mount(self):
-        self.disabled = True
-
-    def compose(self):
-        with Horizontal():
-            with Container(classes="grid_item"):
-                yield TimeDisplay()   
-            with Container(classes="grid_item"):
-                yield Label("Race Controls")
-                yield Button("Start", id="start_car_button", classes="success")
-                yield Button("Stop", id="stop_car_button", classes="error")
-            with Vertical(classes="grid_item"):
-                yield Label("PID Tuning")
-                yield Input(placeholder="Ksp", id="Ksp")
-                yield Input(placeholder="Ksi", id="Ksi")
-                yield Input(placeholder="Ksd", id="Ksd")
-                yield Button("Update", id="update_pid_button")
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        connection = self.app.query_one(ConnectionSettings)
-        start:Button = self.query_one("#start_car_button")
-        stop:Button = self.query_one("#stop_car_button")
-
-        if event.button.id == "start_car_button":
-            connection.transmission_worker(id=comm_link.START_RACE, payload={'race_duration':90_000})
-            self.add_class("started")
-            stop.focus()
-            event.stop()
-        elif event.button.id == "stop_car_button":
-            connection.transmission_worker(id=comm_link.STOP_RACE, paylaod={})
-            self.remove_class("started")
-            start.focus()
-            event.stop()
-        elif event.button.id == "update_pid_button":
-            inputs = self.query(Input).results()
-            event.stop()
-            raise NotImplementedError("PID Update Method Not Completed")
-        return
-
-    @work(exclusive=True)
-    async def verify_inputs(self):
-        connection = self.app.query_one(ConnectionSettings)
-        pids = []
-            
-
-        connection.transmission_worker(comm_link.UPDATE_PID, {'new_pid':[]})
-
-    async def on_vehicle_state_changed(self, message: VehicleStateChanged) -> None:
-        data = message.vehicle_data
-        payload = data["payload"]
-
-        if data["payload_id"] == 0:
-            timedisplay = self.query_one(TimeDisplay)
-            timedisplay.time = payload["millis"]
-            pass     
-
-        pass
+        if self.payload is None:
+            return {'packet_id':self.packet_id}
+        return {'packet_id': self.packet_id, 'payload': self.payload}
 
 class ConnectionSettings(Static):
     """Lets user select the port to use."""
+
+     #### MESSAGES
+    class VehicleStateChanged(Message):
+        def __init__(self, id:int, data:dict) -> None:
+            self.data:dict = data
+            self.id:int = id
+            super().__init__()
+
 
     selected_port: str|None = None
     try_connecting: bool = False
@@ -119,7 +63,7 @@ class ConnectionSettings(Static):
     telemetry_timer: Timer
 
     def recurring_telemetry(self):
-        self.transmission_worker(comm_link.REQUEST_TELEMETRY, {})
+        self.transmission_worker(comm_link.REQUEST_TELEMETRY, None)
 
     def set_connected_state(self, connected_state:int) -> None:
         """Sets the connect button based on state: 
@@ -200,7 +144,8 @@ class ConnectionSettings(Static):
         for port in serial.tools.list_ports.comports():
             ports.add_option(port.name)
 
-        self.telemetry_timer = self.set_interval(0.05, self.recurring_telemetry, pause=True)
+        self.recurring_telemetry()
+        self.telemetry_timer = self.set_interval(1, self.recurring_telemetry, pause=True)
 
     def on_switch_changed(self, event: Switch.Changed):
         if event.switch.id == "parity_en_sw":
@@ -246,14 +191,35 @@ class ConnectionSettings(Static):
                 self.connection_handle = None
 
     def receive_telemetry(self, port:serial.Serial, unpacker: msgpack.Unpacker, worker: Worker):
-        incoming = bytes()
-        while min(incoming, default = 1) != 0 and not worker.is_cancelled:
-            incoming += port.read(1)
-    
-        incoming = cobs.decode(incoming[:-1])
-        unpacker.feed(incoming)
+        incoming:bytes = bytes()
+
+        log("Waiting for incoming byte.")       
+        while not worker.is_cancelled: # Receive until null byte & not canceled
+            b = port.read(1)
+            if b == b'\x00':
+                break
+            incoming += b
+
+        if worker.is_cancelled:
+            return
+        
+        hash = crc8.crc8()
+        incoming = cobs.decode(incoming)
+
+        log("Incoming packet: "+ str(incoming))
+
+        hash.update(incoming[1:-1]) # cut out the id and crc8
+        if hash.digest() != int.to_bytes(incoming[-1]):
+            log("Packet does not match digest. -> "+ str(incoming[-1]) +" =/=" + str(hash.digest()))
+            return
+        
+        log("Successfully found a packet!")
+        self.packets_received += 1
+
+        unpacker.feed(incoming[1:-1]) # Skip id & crc
         for o in unpacker:
-            state = VehicleStateChanged(o)
+            log("Object: "+str(o))
+            state = self.VehicleStateChanged(incoming[0],o)
             self.post_message(state)
 
     ### REACTIVE
@@ -265,7 +231,6 @@ class ConnectionSettings(Static):
     def watch_packets_received(self, packets):
         self.query_one("#packets_received").update(f"Packets received: {packets}")
         pass
-
 
     ### WORKER #################### WORKER ###################
 
@@ -324,18 +289,93 @@ class ConnectionSettings(Static):
     def transmission_worker(self, id:int, payload:dict):
         self.packets_sent += 1
         if self.bt_handle.is_open:
-            import crc8
+            
             hash = crc8.crc8()
-            packet = DataPacket(payload, packet_id=self.packets_sent)
-            bites = msgpack.packb(packet.asdict())
+            packet = DataPacket(payload, packet_id=3) # TODO CHange back to self.packets_sent
 
-            # Create bytes for msgpack |id | msgpack|crc|
-            data_bytes = bytes(id) + bites
-            hash.update(data_bytes)
-            data_bytes_crc = data_bytes + hash.digest()
-
-            self.bt_handle.write(cobs.encode(data_bytes_crc)+bytes('\0', 'ascii'))
+            bites:bytes = msgpack.packb(packet.asdict()) # msgpack bytes of packet
+            log("Packet: "+ str(bites))
+            # Create bytes for msgpack |id| msgpack | crc8 (of only the msgpack) |
+            hash.update(bites)
+            data_bytes = cobs.encode(int.to_bytes(id) + bites + hash.digest())
+            log("Writing: "+ str(data_bytes))
+            self.bt_handle.write(data_bytes)
+            self.bt_handle.write(bytes(1)) # Write a null byte. This is probably not the best way but this way works :)
             time.sleep(0.001)
+
+class ControlPanel(Static):
+    """Layout for all the controls for the vehicle."""
+    """Needs: PID Steering Tuning, Current Speed Percentage, Current Race Time"""
+    """Needs: Camera Learned Status, Internal Drive State"""
+    
+    def on_vehicle_state_changed(self, event: ConnectionSettings.VehicleStateChanged) -> None:
+        # TODO Add reactive elements for Power,Energy, Speed and Steering.
+        if event.id != comm_link.VEHICLE_STATUS:
+            return
+        # log("Vehicle Stats: " + event.data)
+        event.stop()
+        pass
+
+    def on_mount(self):
+        self.disabled = True
+
+    def compose(self):
+        with Horizontal():
+            with Container(classes="grid_item"):
+                yield TimeDisplay()   
+            with Container(classes="grid_item"):
+                yield Label("Race Controls")
+                yield Button("Start", id="start_car_button", classes="success")
+                yield Button("Stop", id="stop_car_button", classes="error")
+            with Vertical(classes="grid_item"):
+                yield Label("PID Tuning")
+                yield Input(placeholder="Ksp", id="Ksp")
+                yield Input(placeholder="Ksi", id="Ksi")
+                yield Input(placeholder="Ksd", id="Ksd")
+                yield Button("Update", id="update_pid_button")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        connection = self.app.query_one(ConnectionSettings)
+        start:Button = self.query_one("#start_car_button")
+        stop:Button = self.query_one("#stop_car_button")
+
+        log("Start/Stopping Race: "+ str(event.button.label))
+
+        if event.button.id == "start_car_button":
+            connection.transmission_worker(id=comm_link.START_RACE, payload={'race_duration':90_000})
+            self.add_class("started")
+            stop.focus()
+            event.stop()
+        elif event.button.id == "stop_car_button":
+            connection.transmission_worker(id=comm_link.STOP_RACE, payload={"Race?":1})
+            self.remove_class("started")
+            start.focus()
+            event.stop()
+        elif event.button.id == "update_pid_button":
+            inputs = self.query(Input).results()
+            event.stop()
+            raise NotImplementedError("PID Update Method Not Completed")
+        return
+
+    @work(exclusive=True)
+    async def verify_inputs(self):
+        connection = self.app.query_one(ConnectionSettings)
+        pids = []
+            
+
+        connection.transmission_worker(comm_link.UPDATE_PID, {'new_pid':[]})
+
+    async def on_vehicle_state_changed(self, message: ConnectionSettings.VehicleStateChanged) -> None:
+        data = message.vehicle_data
+        payload = data["payload"]
+
+        if data["payload_id"] == 0:
+            timedisplay = self.query_one(TimeDisplay)
+            timedisplay.time = payload["millis"]
+            pass     
+
+        pass
+
 
 class CarControlApp(App):
 
@@ -367,7 +407,7 @@ class CarControlApp(App):
         if not switcher.get_child_by_id(b_id) is None:
             switcher.current = b_id
 
-    def on_vehicle_state_changed(self, event: VehicleStateChanged):
+    def on_vehicle_state_changed(self, event: ConnectionSettings.VehicleStateChanged):
         ctrls:ControlPanel = self.query_one(ControlPanel)
         ctrls.on_vehicle_state_changed(event)
 
