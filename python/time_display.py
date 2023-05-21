@@ -8,5 +8,5 @@ class TimeDisplay(Static):
     def watch_time(self, time: int) -> None:
         """Called when time changes"""
         seconds, mils = divmod(time, 1000)
-        mins, seconds = divmod(time, 60)
+        mins, seconds = divmod(seconds, 60)
         self.update(f"{mins:02.0f}:{seconds:02.0f}.{mils:03.0f}")

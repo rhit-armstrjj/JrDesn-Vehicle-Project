@@ -1,11 +1,11 @@
 
 """
-    Data Packet Structure
+    Data Packet Structure !! OUT OF DATE !!
     ---------------------
 
     packet id: int # Number id of packet
-    payload_id: int
-    payload: {struct}
+    rest of packet is a map.
+    {struct}
 """
 
 """
@@ -32,8 +32,12 @@ ERROR = -1
 
     Battery Voltage: float
     Total Current: float
+    power
+    energy
 
-    Steering PID: float[3]
+    P: float
+    I: float
+    D: float
 """
 VEHICLE_STATUS = 32
 
@@ -41,9 +45,11 @@ VEHICLE_STATUS = 32
     Steering PID Update Command (Payload)
     id = 1
     ------------------
-    new_pid: float[3] # p, i, d
+    p: float # p, i, d
+    i: float
+    d: float
 """
-UPDATE_PID = 1
+UPDATE_PID = 69
 
 """
     Start Race Command (Payload)

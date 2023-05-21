@@ -4,6 +4,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import *
 from textual.worker import Worker, get_current_worker, WorkerState
 from textual.message import Message
+from textual.binding import Binding
 
 from textual import work, log
 from textual.reactive import reactive
@@ -14,28 +15,16 @@ import comm_link
 from time_display import TimeDisplay
 from cobs import cobs
 
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from typing import TextIO
+
 import serial
 import serial.tools.list_ports
 import msgpack
 import time
 import threading
 import crc8
-
-class DataPacket():
-    packet_id:int = 0
-    payload: dict
-
-    def __init__(self, payload, packet_id = 0) -> None:
-        self.payload = payload
-        self.packet_id = packet_id
-
-    def __str__(self):
-        return str(self.asdict())
-
-    def asdict(self):
-        if self.payload is None:
-            return {'packet_id':self.packet_id}
-        return {'packet_id': self.packet_id, 'payload': self.payload}
 
 class ConnectionSettings(Static):
     """Lets user select the port to use."""
@@ -47,6 +36,10 @@ class ConnectionSettings(Static):
             self.id:int = id
             super().__init__()
 
+    class ConnectedStateChange(Message):
+        def __init__(self, connected:bool) -> None:
+            self.connected:bool = connected
+            super().__init__()
 
     selected_port: str|None = None
     try_connecting: bool = False
@@ -75,10 +68,11 @@ class ConnectionSettings(Static):
         log("Setting connect button state to "+str(connected_state))
         if connected_state == 2:
             button.label = "Disconnect"
-            self.app.query_one(ControlPanel).disabled = False
+            self.app.query_one(ControlPanel).disabled = False  # TODO Change to messsage post to parent, but oh well.
             self.packets_received = 0
             self.packets_sent = 0
             log("Starting telemetry timer.")
+            self.recurring_telemetry()
             self.telemetry_timer.reset()
             self.telemetry_timer.resume()
         elif connected_state == 1:
@@ -144,9 +138,6 @@ class ConnectionSettings(Static):
         for port in serial.tools.list_ports.comports():
             ports.add_option(port.name)
 
-        self.recurring_telemetry()
-        self.telemetry_timer = self.set_interval(1, self.recurring_telemetry, pause=True)
-
     def on_switch_changed(self, event: Switch.Changed):
         if event.switch.id == "parity_en_sw":
             options = self.query(Switch).filter('.parity_dep')
@@ -173,10 +164,11 @@ class ConnectionSettings(Static):
             event.stop()
         return
     
-    async def on_vehicle_state_changed(self, message: VehicleStateChanged) -> None:
-        log("State Changed!")
-        control_panel:ControlPanel = self.app.query_one("#control_panel")
-        control_panel.post_message(message)
+    # TODO if on_vehicle_state_changed doesnt work, un-comment out.
+    # async def on_vehicle_state_changed(self, message: VehicleStateChanged) -> None:
+        # log("State Changed!")
+        # control_panel:ControlPanel = self.app.query_one("#control_panel")
+        # control_panel.post_message(message)
 
     def handle_connection(self):
         """Handles when the connection button is pressed."""
@@ -184,6 +176,7 @@ class ConnectionSettings(Static):
         if self.try_connecting or self.connection_handle.is_finished:
             self.set_error_text_state(None)
             self.connection_worker()
+            self.telemetry_timer = self.set_interval(0.05, self.recurring_telemetry, pause=True) # telemetry interval timer
         else:
             with self.connection_handle_lock:
                 log("Cancelling connection handle.")
@@ -219,8 +212,8 @@ class ConnectionSettings(Static):
         unpacker.feed(incoming[1:-1]) # Skip id & crc
         for o in unpacker:
             log("Object: "+str(o))
-            state = self.VehicleStateChanged(incoming[0],o)
-            self.post_message(state)
+            state = self.VehicleStateChanged(incoming[0], o)
+            self.app.post_message(state)
 
     ### REACTIVE
 
@@ -277,6 +270,7 @@ class ConnectionSettings(Static):
             with self.bt_handle_lock:
                 self.bt_handle = bt_port
             
+            self.app.post_message(self.ConnectedStateChange(True))
             unpacker = msgpack.Unpacker()
             while not worker.is_cancelled:
                 log("Receive Loop")
@@ -284,17 +278,20 @@ class ConnectionSettings(Static):
                 time.sleep(0.01)
         
         log("Successfully disconnected.")
+        self.app.post_message(self.ConnectedStateChange(False))
 
     @work(exit_on_error=False)
     def transmission_worker(self, id:int, payload:dict):
         self.packets_sent += 1
         if self.bt_handle.is_open:
-            
             hash = crc8.crc8()
-            packet = DataPacket(payload, packet_id=3) # TODO CHange back to self.packets_sent
+            if payload == None:
+                log("None Payload Gotten")
+                payload = {}
 
-            bites:bytes = msgpack.packb(packet.asdict()) # msgpack bytes of packet
-            log("Packet: "+ str(bites))
+            payload.update({"packet_id": self.packets_sent})
+            bites:bytes = msgpack.packb(payload) # msgpack bytes of packet
+            log(f"Packet: ID {id} "+ str(bites))
             # Create bytes for msgpack |id| msgpack | crc8 (of only the msgpack) |
             hash.update(bites)
             data_bytes = cobs.encode(int.to_bytes(id) + bites + hash.digest())
@@ -307,22 +304,28 @@ class ControlPanel(Static):
     """Layout for all the controls for the vehicle."""
     """Needs: PID Steering Tuning, Current Speed Percentage, Current Race Time"""
     """Needs: Camera Learned Status, Internal Drive State"""
-    
-    def on_vehicle_state_changed(self, event: ConnectionSettings.VehicleStateChanged) -> None:
-        # TODO Add reactive elements for Power,Energy, Speed and Steering.
-        if event.id != comm_link.VEHICLE_STATUS:
-            return
-        # log("Vehicle Stats: " + event.data)
-        event.stop()
-        pass
+
+    Ksp = reactive(0.0)
+    Ksi = reactive(0.0)
+    Ksd = reactive(0.0)
+    power = reactive(0.0)
+    speed = reactive(0.0)
 
     def on_mount(self):
         self.disabled = True
 
     def compose(self):
         with Horizontal():
-            with Container(classes="grid_item"):
-                yield TimeDisplay()   
+            with Vertical(classes="grid_item"):
+                yield TimeDisplay(id="millis")
+                yield TimeDisplay(id="car_time")
+                yield Label("Voltage: 0 V", id="voltage")
+                yield Label("Current: 0 mA", id="current")
+                yield Label("Power: 0 mW", id="power")
+                yield Label("Energy: 0 J", id="energy")
+                yield Label("Speed: 0", id="speed")
+                yield Label("Steering: 0", id="steering")
+
             with Container(classes="grid_item"):
                 yield Label("Race Controls")
                 yield Button("Start", id="start_car_button", classes="success")
@@ -352,29 +355,54 @@ class ControlPanel(Static):
             start.focus()
             event.stop()
         elif event.button.id == "update_pid_button":
-            inputs = self.query(Input).results()
+            self.verify_inputs()
             event.stop()
-            raise NotImplementedError("PID Update Method Not Completed")
         return
+    
+    ### REACTIVE
+
+    def watch_packets_sent(self, packets):
+        self.query_one("#packets_sent").update(f"Packets Sent: {packets}")
+        pass
+
+    def watch_packets_received(self, packets):
+        self.query_one("#packets_received").update(f"Packets received: {packets}")
+        pass
+
+    ### Workers
 
     @work(exclusive=True)
     async def verify_inputs(self):
+        """Validate the inputs of the PID queries. If not successful, throw an error. (Workers are graceful for errors)"""
         connection = self.app.query_one(ConnectionSettings)
-        pids = []
+        inputs = self.query(Input).results()
+        values:dict = dict()
+        for input in inputs:
+            values.update({input.id: float(input.value)})
             
+        log(f"Values from PID: {values}")    
+        connection.transmission_worker(comm_link.UPDATE_PID, values)
 
-        connection.transmission_worker(comm_link.UPDATE_PID, {'new_pid':[]})
+    async def on_connection_settings_vehicle_state_changed(self, message: ConnectionSettings.VehicleStateChanged) -> None:
+        payload = message.data
+        log(f"Processing Vehicle State Changes: Id: {message.id}")
+        if message.id == comm_link.VEHICLE_STATUS:
+            timedisplay = self.query_one("#millis")
+            racedisplay = self.query_one("#car_time")
+            timedisplay.time = payload["ms"]
+            racedisplay.time = payload["raceTime"]
+            self.query_one("#voltage").update("Voltage: {:.2f} V".format(payload['busVoltage']))
+            self.query_one("#current").update("Current: {:.2f} mA".format(payload['current']))
+            self.query_one("#power").update("Power: {:.2f} mW".format(payload['power']))
+            self.query_one("#energy").update("Energy: {:.2f} J".format(payload['energySpent']))  
+            self.query_one("#speed").update("Speed: {}".format(payload['driveSpeed']))
+            self.query_one("#steering").update("Steering: {}".format(payload['servoSetting']-90))
 
-    async def on_vehicle_state_changed(self, message: ConnectionSettings.VehicleStateChanged) -> None:
-        data = message.vehicle_data
-        payload = data["payload"]
-
-        if data["payload_id"] == 0:
-            timedisplay = self.query_one(TimeDisplay)
-            timedisplay.time = payload["millis"]
-            pass     
-
-        pass
+        message.stop()
+    
+    async def on_connected_state_changed(self, message: ConnectionSettings.ConnectedStateChange) -> None:
+        if not message.connected:
+            self.query_one("#stop_car_button").action_press()
 
 
 class CarControlApp(App):
@@ -382,7 +410,16 @@ class CarControlApp(App):
     CSS_PATH = "css/app.css"
     TITLE = "Car Controller"
 
-    BINDINGS = []
+    figure: Figure
+    voltAxis: plt.Axes
+    time:list = []
+    voltage:list = []
+
+    file_handle:TextIO = None
+
+    BINDINGS = [
+        Binding(key="q", action="quit", description="Quit the app"),
+    ]
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -407,9 +444,44 @@ class CarControlApp(App):
         if not switcher.get_child_by_id(b_id) is None:
             switcher.current = b_id
 
-    def on_vehicle_state_changed(self, event: ConnectionSettings.VehicleStateChanged):
+    def on_connection_settings_vehicle_state_changed(self, event: ConnectionSettings.VehicleStateChanged):
+        log("Parent Recieved Change")
         ctrls:ControlPanel = self.query_one(ControlPanel)
-        ctrls.on_vehicle_state_changed(event)
+        ctrls.post_message(event)
+
+        if event.data.get("state", 0) == 0:
+            if self.file_handle != None:
+                self.file_handle.close()
+
+        if event.data.get("state", 0) == 1:
+            # Start graphing/plotting
+            plt.close(self.figure)
+            self.figure, axes = plt.subplots(2,1)
+            self.voltAxis = axes[0,0]
+            self.steeringAxis = axes[1,0]
+            self.figure.canvas.draw()
+            
+            self.time.insert(0)
+            self.voltage.insert(event.data["busVoltage"])
+            self.voltAxis.scatter(self.time, self.voltage)
+
+            
+
+        elif event.data.get("state", 0) == 2:
+            # Record data.
+            self.time.insert(event.data["raceTime"])
+            self.voltage.insert(event.data["busVoltage"])
+            self.figure.canvas.draw()
+            pass
+
+    def on_connected_state_changed(self, event: ConnectionSettings.ConnectedStateChange):
+        ctrls:ControlPanel = self.query_one(ControlPanel)
+        ctrls.post_message(event)
+
+    @work(exclusive=True)
+    def beginDataCollection(self):
+        pass
+
 
 # Entrypoint
 if __name__ == '__main__':

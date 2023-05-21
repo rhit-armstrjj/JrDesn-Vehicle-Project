@@ -1,8 +1,8 @@
-
 /*
 * Authors: Jake Armstrong, Garrett Hart
 * Date: 3/23/2023
 */
+
 #include <analogWrite.h>
 #include <ESP32PWM.h>
 #include <ESP32Servo.h>
@@ -22,7 +22,7 @@
 uint32_t loopDelay = 60;
 unsigned int computeTime = 0;
 
-float Ksp = 0.452, Ksi = 0.0003, Ksd = 0.00, Hz = 1000/loopDelay;
+float Ksp = 0.455, Ksi = 0.0003, Ksd = 0.00, Hz = 1000/loopDelay;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170
@@ -59,10 +59,11 @@ const uint8_t REQUEST_TELEMETRY = 0x34;
 const uint8_t VEHICLE_STATS = 0x20;
 const uint8_t START_RACE = 2;
 const uint8_t STOP_RACE = 3;
+const uint8_t UPDATE_PID = 69;
 
 struct Telemetry {
   MsgPack::str_t ms, raceTime, arrowExists, arrowHead, arrowTail, 
-  speed, servoValue, voltage, current, power, energy, P,I,D;
+  speed, servoValue, voltage, current, power, energy, P,I,D, state;
   unsigned int k_ms;
   unsigned int k_raceTime;
 
@@ -82,9 +83,11 @@ struct Telemetry {
   float k_I;
   float k_D;
 
+  int k_state;
+
   MSGPACK_DEFINE_MAP(ms, k_ms, raceTime, k_raceTime, arrowExists, k_arrowExists,
    arrowHead, k_arrowHead, arrowTail, k_arrowTail, speed, k_speed, servoValue, k_servoValue,
-   voltage, k_voltage, current, k_current, power, k_power, energy, k_energy, P, k_P, I, k_I, D, k_D);
+   voltage, k_voltage, current, k_current, power, k_power, energy, k_energy, P, k_P, I, k_I, D, k_D, state,k_state);
 };
 
 String *device_name = new String("ECE362CarTeam07");
@@ -113,7 +116,6 @@ struct PowerInfo {
   float busVoltage;
   float current;
   float power;
-  MSGPACK_DEFINE_MAP(busVoltage, current, power);
 };
 
 /** DO NOT CHANGE THE FOLLOWING VARIABLES WITHOUT LOCKING MUTEX*/
@@ -190,7 +192,7 @@ void setSteering(int angle) {
 */
 void startup_huskylens() {
   while(!camera.begin(Wire)) {
-    SerialBT.println("# Warning: Huskylens not connected. Retrying.");
+    Serial.println("# Warning: Huskylens not connected. Retrying.");
     delay(400);
   }
 
@@ -217,6 +219,7 @@ void init_bluetooth() {
 void setSpeed(int speed) {
     if(speed < 0 || speed > 100) return;
     if(speed == 0) {
+      driveSpeed = 0;
       motor.write(0);
       return;
     }
@@ -253,7 +256,7 @@ void getPowerInfo(struct PowerInfo *data) {
     };
 
     currentAverage = (sum / currentList.size());
-    energyExpended = energyExpended + (power*1000/loopDelay);
+    energyExpended = energyExpended + (power/1000.0)*(loopDelay/1000.0);
 
     xSemaphoreGive(powerMutex); // Give mutex back
   }
@@ -330,9 +333,9 @@ void driveStateLoop() {
   setSteering(steerPD);
   // feedback is mapped to arrow bc speed should determined by angle of steering column
   if(abs(steeringMapped) < 20) {
-    setSpeed(10);
+    setSpeed(8);
   } else {
-    setSpeed(5);
+    setSpeed(4);
   }
 
   if(arrowLost) setSpeed(0); // Failsafe if the car falls off of the track.
@@ -357,8 +360,6 @@ void waitingStateLoop() {
 void setup()
 {
   Serial.begin(115200);
-  // startup_huskylens();
-  // Serial.println("Camera Init");
   Wire.begin();
   Serial.println("Wire Began");
   init_bluetooth();
@@ -367,7 +368,13 @@ void setup()
   Serial.println("Motor Init");
   startup_steering(); 
   Serial.println("Steering Init");
+  startup_huskylens();
+  Serial.println("Camera Init");
   powerMutex = xSemaphoreCreateMutex();
+  if (! ina219.begin()) {
+    Serial.println("Failed to find INA219 chip");
+    while (1) { delay(10); }
+  }
 
   state = Waiting;
 
@@ -391,28 +398,30 @@ void setup()
           "current",
           "power",
           "energySpent",
-          "P","I","D",
+          "P","I","D","state",
           millis(),
-          0,// driveTime,
+          driveTime,// driveTime,
 
-          0,// arrowLost,
-          0,// arrowTarget,
-          0,// arrowEnd,
+          arrowLost,// arrowLost,
+          arrowTarget,// arrowTarget,
+          arrowEnd,// arrowEnd,
 
-          0,// driveSpeed,
-          0,// mapped_steering,
+          driveSpeed,// driveSpeed,
+          mapped_steering,// mapped_steering,
 
           currentPower.busVoltage,
-          427.420,// Current currant
+          ina219.getCurrent_mA(),// Current currant
           currentPower.power,
           energyExpended,
 
           Ksp,// Ksp,
           Ksi,// Ksi,
-          Ksd// Ksd
+          Ksd,// Ksd
+
+          state
         };
 
-        MsgPacketizer::send(SerialBT, REQUEST_TELEMETRY, stuff);
+        MsgPacketizer::send(SerialBT, VEHICLE_STATS, stuff);
         
       }
   );
@@ -421,6 +430,7 @@ void setup()
     [&](const MsgPack::map_t<String, int> unused) {
       Serial.println("Starting Race");
       // TODO: Set state to start race state.
+      state = State::StartRace;
     }
   );
 
@@ -430,6 +440,19 @@ void setup()
       state = State::Waiting;
     }
   );
+  
+  //Subscribe to Update PID Data
+  MsgPacketizer::subscribe(SerialBT, UPDATE_PID, 
+    [](MsgPack::map_t<String, float> PID) {
+      Serial.println("Updating PID");
+      Ksp = PID["Ksp"];
+      Ksi = PID["Ksi"];
+      Ksd = PID["Ksd"];
+      Serial.print("Ksp ");
+      Serial.println(PID["Ksp"]);
+      steeringPID = FastPID(Ksp, Ksi, Ksd, Hz, steeringOutputBits, steeringOutputSigned);
+    }
+  );
 
 }
 
@@ -437,12 +460,12 @@ void setup()
 void loop()
 {
   unsigned int loopTime = millis();
+  getPowerInfo(&currentPower);
 
   // if(SerialBT.available() > 0) Serial.printf("%d Bytes Available\r\n", SerialBT.available());
 
   MsgPacketizer::parse();
   
-  getPowerInfo(&currentPower);
 
   switch(state) {
     case StartRace:
