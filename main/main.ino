@@ -22,7 +22,7 @@
 uint32_t loopDelay = 60;
 unsigned int computeTime = 0;
 
-float Ksp = 0.455, Ksi = 0.0003, Ksd = 0.00, Hz = 1000/loopDelay;
+float Ksp = 0.435, Ksi = 0.0001, Ksd = 0.00, Hz = 1000/loopDelay;
 
 /******** MOTORS **********/
 #define STEERING_MAX 170

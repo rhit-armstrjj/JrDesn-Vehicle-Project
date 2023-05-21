@@ -23,6 +23,7 @@ import serial
 import serial.tools.list_ports
 import msgpack
 import time
+from datetime import datetime
 import threading
 import crc8
 
@@ -176,7 +177,7 @@ class ConnectionSettings(Static):
         if self.try_connecting or self.connection_handle.is_finished:
             self.set_error_text_state(None)
             self.connection_worker()
-            self.telemetry_timer = self.set_interval(0.05, self.recurring_telemetry, pause=True) # telemetry interval timer
+            self.telemetry_timer = self.set_interval(0.1, self.recurring_telemetry, pause=True) # telemetry interval timer
         else:
             with self.connection_handle_lock:
                 log("Cancelling connection handle.")
@@ -311,6 +312,12 @@ class ControlPanel(Static):
     power = reactive(0.0)
     speed = reactive(0.0)
 
+    class RaceStateChanged(Message):
+        def __init__(self, started=False):
+            self.started = started
+            super().__init__()
+            
+
     def on_mount(self):
         self.disabled = True
 
@@ -348,11 +355,13 @@ class ControlPanel(Static):
             connection.transmission_worker(id=comm_link.START_RACE, payload={'race_duration':90_000})
             self.add_class("started")
             stop.focus()
+            self.app.post_message(self.RaceStateChanged(True))
             event.stop()
         elif event.button.id == "stop_car_button":
             connection.transmission_worker(id=comm_link.STOP_RACE, payload={"Race?":1})
             self.remove_class("started")
             start.focus()
+            self.app.post_message(self.RaceStateChanged(False))
             event.stop()
         elif event.button.id == "update_pid_button":
             self.verify_inputs()
@@ -410,12 +419,12 @@ class CarControlApp(App):
     CSS_PATH = "css/app.css"
     TITLE = "Car Controller"
 
-    figure: Figure
-    voltAxis: plt.Axes
+    figure:plt.Figure = None
+    voltAxis: plt.Axes = None
     time:list = []
     voltage:list = []
 
-    file_handle:TextIO = None
+    file_handle = None
 
     BINDINGS = [
         Binding(key="q", action="quit", description="Quit the app"),
@@ -450,33 +459,65 @@ class CarControlApp(App):
         ctrls.post_message(event)
 
         if event.data.get("state", 0) == 0:
-            if self.file_handle != None:
-                self.file_handle.close()
+            pass
 
         if event.data.get("state", 0) == 1:
             # Start graphing/plotting
-            plt.close(self.figure)
-            self.figure, axes = plt.subplots(2,1)
-            self.voltAxis = axes[0,0]
-            self.steeringAxis = axes[1,0]
-            self.figure.canvas.draw()
-            
             self.time.insert(0)
             self.voltage.insert(event.data["busVoltage"])
             self.voltAxis.scatter(self.time, self.voltage)
-
             
+            for k in event.data.keys():
+                self.file_handle.write(str(k) + ", ")
+            self.file_handle.write("\n")
+            for k in event.data.values():
+                self.file_handle.write(str(k) + ", ")
+                self.file_handle.write("\n")
 
         elif event.data.get("state", 0) == 2:
             # Record data.
-            self.time.insert(event.data["raceTime"])
-            self.voltage.insert(event.data["busVoltage"])
+            self.time.append(event.data["raceTime"])
+            self.voltage.append(event.data["busVoltage"])
             self.figure.canvas.draw()
-            pass
+            log(f"File Exists: {self.file_handle}, Closed: {self.file_handle.closed}")
+            if self.file_handle.closed:
+                return
+            
+            if not self.printed_header:
+                self.printed_header = True
+                for k in event.data.keys():
+                    self.file_handle.write(str(k) + ", ")
+                self.file_handle.write("\n")
+
+            for k in event.data.values():
+                self.file_handle.write(str(k) + ", ")
+
+            self.file_handle.write("\n")
 
     def on_connected_state_changed(self, event: ConnectionSettings.ConnectedStateChange):
         ctrls:ControlPanel = self.query_one(ControlPanel)
         ctrls.post_message(event)
+
+    def on_control_panel_race_state_changed(self, event: ControlPanel.RaceStateChanged):
+        if event.started:
+            file_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S Device Logs.csv")
+            log("Creating file "+ str(file_name))
+            self.file_handle = open(file_name, 'w')
+            if self.figure != None:
+                plt.close(self.figure)
+            if self.file_handle.closed:
+                log("WTF")
+            (figure, axes) = plt.subplots(2,2)
+            self.figure = figure
+            self.voltAxis = axes[0,0]
+            self.steeringAxis = axes[1,0]
+            self.figure.canvas.draw()
+            # plt.show(block=False)
+            self.printed_header = False
+        else:
+            log("Closing File Handle")
+            self.file_handle.close()
+
 
     @work(exclusive=True)
     def beginDataCollection(self):
