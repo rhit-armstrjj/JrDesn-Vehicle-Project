@@ -15,8 +15,8 @@ import comm_link
 from time_display import TimeDisplay
 from cobs import cobs
 
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
+# import matplotlib.pyplot as plt
+# from matplotlib.figure import Figure
 from typing import TextIO
 
 import serial
@@ -177,7 +177,7 @@ class ConnectionSettings(Static):
         if self.try_connecting or self.connection_handle.is_finished:
             self.set_error_text_state(None)
             self.connection_worker()
-            self.telemetry_timer = self.set_interval(0.1, self.recurring_telemetry, pause=True) # telemetry interval timer
+            self.telemetry_timer = self.set_interval(0.15, self.recurring_telemetry, pause=True) # telemetry interval timer
         else:
             with self.connection_handle_lock:
                 log("Cancelling connection handle.")
@@ -380,7 +380,7 @@ class ControlPanel(Static):
 
     ### Workers
 
-    @work(exclusive=True)
+    @work(exclusive=True, exit_on_error=False)
     async def verify_inputs(self):
         """Validate the inputs of the PID queries. If not successful, throw an error. (Workers are graceful for errors)"""
         connection = self.app.query_one(ConnectionSettings)
@@ -419,8 +419,8 @@ class CarControlApp(App):
     CSS_PATH = "css/app.css"
     TITLE = "Car Controller"
 
-    figure:plt.Figure = None
-    voltAxis: plt.Axes = None
+    # figure:plt.Figure = None
+    # voltAxis: plt.Axes = None
     time:list = []
     voltage:list = []
 
@@ -463,9 +463,9 @@ class CarControlApp(App):
 
         if event.data.get("state", 0) == 1:
             # Start graphing/plotting
-            self.time.insert(0)
-            self.voltage.insert(event.data["busVoltage"])
-            self.voltAxis.scatter(self.time, self.voltage)
+            # self.time.insert(0)
+            # self.voltage.insert(event.data["busVoltage"])
+            # self.voltAxis.scatter(self.time, self.voltage)
             
             for k in event.data.keys():
                 self.file_handle.write(str(k) + ", ")
@@ -478,7 +478,7 @@ class CarControlApp(App):
             # Record data.
             self.time.append(event.data["raceTime"])
             self.voltage.append(event.data["busVoltage"])
-            self.figure.canvas.draw()
+            # self.figure.canvas.draw()
             log(f"File Exists: {self.file_handle}, Closed: {self.file_handle.closed}")
             if self.file_handle.closed:
                 return
@@ -503,15 +503,15 @@ class CarControlApp(App):
             file_name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S Device Logs.csv")
             log("Creating file "+ str(file_name))
             self.file_handle = open(file_name, 'w')
-            if self.figure != None:
-                plt.close(self.figure)
-            if self.file_handle.closed:
-                log("WTF")
-            (figure, axes) = plt.subplots(2,2)
-            self.figure = figure
-            self.voltAxis = axes[0,0]
-            self.steeringAxis = axes[1,0]
-            self.figure.canvas.draw()
+            # if self.figure != None:
+            #     plt.close(self.figure)
+            # if self.file_handle.closed:
+            #     log("WTF")
+            # (figure, axes) = plt.subplots(2,2)
+            # self.figure = figure
+            # self.voltAxis = axes[0,0]
+            # self.steeringAxis = axes[1,0]
+            # self.figure.canvas.draw()
             # plt.show(block=False)
             self.printed_header = False
         else:
@@ -519,7 +519,7 @@ class CarControlApp(App):
             self.file_handle.close()
 
 
-    @work(exclusive=True)
+    @work(exclusive=True, exit_on_error=False)
     def beginDataCollection(self):
         pass
 

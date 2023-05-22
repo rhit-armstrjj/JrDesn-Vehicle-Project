@@ -35,7 +35,7 @@ bool steeringOutputSigned = true;
 FastPID steeringPID;
 int mapped_steering = 0;
 
-#define SPEED_MIN 49
+#define SPEED_MIN 48
 #define SPEED_MAX 120
 #define SPEED_PIN 33
 Servo motor;
@@ -280,6 +280,8 @@ int getHuskyArrowX() {
     //Stop Car?
     arrowLost = true;
     return 160;
+  } else {
+    arrowLost = false;
   }
 
   arrowTarget = arrow.xTarget;
@@ -330,15 +332,14 @@ void driveStateLoop() {
   //SerialBT.print("Arrow X: ");
   //SerialBT.println(steeringMapped);
   int steerPD = steeringPID.step(0, steeringMapped);
-  setSteering(steerPD);
+  if(!arrowLost) setSteering(steerPD);
   // feedback is mapped to arrow bc speed should determined by angle of steering column
-  if(abs(steeringMapped) < 20) {
-    setSpeed(8);
-  } else {
-    setSpeed(4);
+  setSpeed(1*(12.8-currentPower.busVoltage));
+  if(abs(arrowTarget - arrowEnd) < 10) {
+    setSpeed(8 + (12.5-currentPower.busVoltage));
   }
 
-  if(arrowLost) setSpeed(0); // Failsafe if the car falls off of the track.
+  // if(arrowLost) setSpeed(0); // Failsafe if the car falls off of the track.
   
   driveTime = millis() - startDriveTime;
   if(driveTime >= 90000) state = Waiting; 
@@ -389,7 +390,7 @@ void setup()
       Telemetry stuff = {
           "ms",
           "raceTime",
-          "arrowExists",
+          "arrowLost",
           "arrowTarget",
           "arrowEnd",
           "driveSpeed",
